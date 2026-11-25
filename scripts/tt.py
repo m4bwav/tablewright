@@ -22,7 +22,7 @@ PF_XP = {-4: 10, -3: 15, -2: 20, -1: 30, 0: 40, 1: 60, 2: 80, 3: 120, 4: 160}
 PF_BUDGET = {"trivial": 40, "low": 60, "moderate": 80, "severe": 120, "extreme": 160}
 PF_ADJUST = {"trivial": 10, "low": 20, "moderate": 20, "severe": 30, "extreme": 40}
 
-# D&D 5e 2024 (SRD 5.2, CC-BY-4.0): XP budget per character by level, and XP by challenge rating.
+# D&D 5e 2024 (SRD 5.2.1, CC-BY-4.0): XP budget per character by level, and XP by challenge rating.
 DND_BUDGET = {
     1: (50, 75, 100), 2: (100, 150, 200), 3: (150, 225, 400), 4: (250, 375, 500), 5: (500, 750, 1100),
     6: (600, 1000, 1400), 7: (750, 1300, 1700), 8: (1000, 1700, 2100), 9: (1300, 2000, 2600),
@@ -37,11 +37,16 @@ CR_XP = {"0": 10, "1/8": 25, "1/4": 50, "1/2": 100, "1": 200, "2": 450, "3": 700
          "21": 33000, "22": 41000, "23": 50000, "24": 62000, "25": 75000, "26": 90000, "27": 105000,
          "28": 120000, "29": 135000, "30": 155000}
 
-LICENCE = """Pathfinder 2e and Starfinder 2e encounter tables: game mechanics under the ORC License
-(Paizo, Pathfinder Player Core / Starfinder Player Core encounter building rules).
-D&D 2024 encounter tables: System Reference Document 5.2 by Wizards of the Coast LLC,
-licensed under CC-BY-4.0 (https://creativecommons.org/licenses/by/4.0/).
-tablewright bundles numbers only, no rules text, creatures or art."""
+LICENCE = """Pathfinder 2e and Starfinder 2e encounter tables (XP budget, character adjustment, creature XP):
+game mechanics under the ORC License (https://paizo.com/orclicense, text by Azora Law).
+ORC Notice / attribution: this product is based on the following Licensed Material:
+Pathfinder GM Core, (c) 2023 Paizo Inc.; Starfinder GM Core, (c) Paizo Inc.
+(encounter building rules; https://2e.aonprd.com/Rules.aspx?ID=2716, https://2e.aonsrd.com/rules/793-xp-budget).
+D&D 2024 encounter tables: This work includes material taken from the System Reference Document 5.2.1
+("SRD 5.2.1") by Wizards of the Coast LLC and available at https://www.dndbeyond.com/srd.
+The SRD 5.2.1 is licensed under the Creative Commons Attribution 4.0 International License (CC-BY-4.0)
+available at https://creativecommons.org/licenses/by/4.0/legalcode.
+tablewright bundles numbers only, no rules text, creatures or art. Sources checked 2026-11-25."""
 
 SCHEMA_REQUIRED = ["name", "system", "level", "ancestry", "class", "abilities", "hp"]
 ABILITIES = ["str", "dex", "con", "int", "wis", "cha"]
