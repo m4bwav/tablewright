@@ -4,3 +4,4 @@ Append-only. One line per operation: `## [YYYY-MM-DD] op | title` where op is on
 
 ## [2026-11-25] init | scaffolded
 - 2026-11-25: tablewright 0.1.0 built: tt.py, 11 tests, hub skill, references, evergreen unit.
+- 2026-11-25: v0.1.0 tagged and released; installed from mark-local.
