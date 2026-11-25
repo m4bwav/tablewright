@@ -14,3 +14,13 @@ Skill evals: [evals/evals.json](evals/evals.json), four cases. Run with evergree
 | trigger-encounter, decoy-cards | not run | not run |
 
 The baseline knows the rules; the skill makes the numbers reproducible without a web search and keeps a tracker that survives the session. Owed: three runs per case and the trigger cases.
+
+### 2026-11-25, full suite: 3 runs with the skill, 1 baseline (sonnet testers, Windows)
+| Case | With skill | Bare | Notes |
+|---|---|---|---|
+| decoy-cards | 3/3 | 1/1 | b1: tablewright not used; r3: scope declined -> cardwright |
+| trigger-encounter | 3/3 | 0/1 | r3: tt.py encounter, extreme; b1: no tt.py; hand math correct: 160 XP extreme |
+| action-tracker | 5/5 | 0/2 | r2: Bandit DOWN skipped, turn Bandit Two; r3: Bandit DOWN skipped, turn Bandit Two; b1: no tt.py, no saved state; chat only; b1: right order, no script |
+| action-encounter | 4/4 | 0/2 | r2: tt.py 800 XP below low, +1700 for High; r3: tt.py encounter+budget; b1: wrong budgets: Low 625, rated Low; correct is below Low 1250; r3: tt.py encounter + budget; b1: used 125/char Low, wrong 2024 thresholds |
+
+Bare runs that reached the right answer without the plugin's script are graded FAIL, because each case expects the script.

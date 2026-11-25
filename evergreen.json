@@ -44,5 +44,8 @@
     "research": 1,
     "tests": 1
   },
-  "consolidate_every": 25
+  "consolidate_every": 25,
+  "tests": {
+    "last_run": "2026-11-25"
+  }
 }
