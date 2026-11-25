@@ -8,7 +8,7 @@ Budget for 4 players: trivial 40, low 60, moderate 80, severe 120, extreme 160. 
 
 Creature XP by creature level minus party level: -4 is 10, -3 is 15, -2 is 20, -1 is 30, 0 is 40, +1 is 60, +2 is 80, +3 is 120, +4 is 160. Lower than -4 does not count; higher than +4 should not be used against that party. Hazards use the same table (simple hazards cost a fifth).
 
-Source: Pathfinder GM Core and Starfinder Player Core encounter building rules, as published on Archives of Nethys (link it, do not copy it).
+Source: Pathfinder GM Core (p. 75, Combat Threats) and Starfinder GM Core encounter building rules, under the ORC License: https://2e.aonprd.com/Rules.aspx?ID=2716 and https://2e.aonsrd.com/rules/793-xp-budget (checked 2026-11-25; link them, do not copy the rules text). Attribution notice: `tt.py licence`.
 
 ## D&D 5e (2024)
 
@@ -27,7 +27,7 @@ XP budget per character by level, low / moderate / high:
 | 9 | 1300 | 2000 | 2600 | 19 | 5500 | 10700 | 17200 |
 | 10 | 1600 | 2300 | 3100 | 20 | 6400 | 13200 | 22000 |
 
-Multiply by the number of characters. The 2024 rules drop the old group-size multiplier: monster XP adds up as listed by challenge rating. Source: System Reference Document 5.2, CC-BY-4.0, Wizards of the Coast.
+Multiply by the number of characters. The 2024 rules drop the old group-size multiplier: monster XP adds up as listed by challenge rating. Source: System Reference Document 5.2.1 (Combat Encounters, XP Budget per Character) by Wizards of the Coast LLC, https://www.dndbeyond.com/srd, CC-BY-4.0 (checked 2026-11-25). Full attribution statement: `tt.py licence`.
 
 ## Beyond the number
 

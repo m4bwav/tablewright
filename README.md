@@ -9,7 +9,7 @@ Tabletop RPG table work, as a Claude Code plugin, for Pathfinder 2e, Starfinder 
 - **Encounters**: `tt.py encounter --system pf2e --party 4 --level 3 --foe 5 --foe 2` gives total XP, the threat band and what the next band needs. `tt.py budget --system 5e --party 4 --level 5 --threat high` gives the XP to spend and sample foe counts.
 - **Tracker**: `tt.py tracker init "Hero:17:20" "Goblin:12:6"`, then `next`, `hit`, `heal`, `cond`, `add`, `show`. Downed combatants are skipped.
 - **Sheets**: `tt.py check char.json` and `tt.py sheet char.json --out sheet.md` from a simple common character schema.
-- **Licences**: `tt.py licence`. tablewright ships numbers only: PF2e and SF2e encounter tables under ORC, D&D 2024 tables from SRD 5.2 under CC-BY-4.0.
+- **Licences**: `tt.py licence`. tablewright ships numbers only: PF2e and SF2e encounter tables from Pathfinder GM Core and Starfinder GM Core under the [ORC License](https://paizo.com/orclicense), D&D 2024 tables from [SRD 5.2.1](https://www.dndbeyond.com/srd) under CC-BY-4.0, with the required attribution in `tt.py licence` (checked 2026-11-25).
 
 Your characters and campaign notes live in `TABLEWRIGHT_HOME` (default `~/.tablewright`), outside the plugin. Needs only Python 3.9+.
 
