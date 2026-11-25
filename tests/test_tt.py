@@ -84,3 +84,8 @@ def test_check_reports_missing(tmp_path):
 
 def test_licence():
     assert "ORC" in run("licence").stdout and "CC-BY-4.0" in run("licence").stdout
+
+
+def test_5e_decimal_cr():
+    _, d = enc("--system", "5e", "--level", "1", "--foe", "0.25", "--foe", "0.5")
+    assert d["xp"] == 150

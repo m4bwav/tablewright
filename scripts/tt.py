@@ -73,6 +73,7 @@ def foe_xp(system, foe, level):
         if d > 4:
             return None, "more than 4 levels above the party: do not use"
         return PF_XP[d], ""
+    foe = {"0.125": "1/8", "0.25": "1/4", "0.5": "1/2", ".125": "1/8", ".25": "1/4", ".5": "1/2"}.get(foe, foe)
     if foe not in CR_XP:
         die(f"unknown challenge rating: {foe} (use 0, 1/8, 1/4, 1/2, 1..30)")
     return CR_XP[foe], ""
@@ -102,7 +103,7 @@ def cmd_encounter(a):
     res = {"system": a.system, "party": a.party, "level": a.level, "xp": total, "threat": band,
            "budgets": budgets, "next": {"threat": nxt[0][0], "xp_needed": nxt[0][1] - total} if nxt else None, "notes": notes}
     if a.system == "5e" and total > budgets["high"]:
-        res["notes"].append("over the High budget: deadly for this party")
+        res["notes"].append("above the High budget (2024 has no higher band): expect a character to drop")
     if a.system != "5e" and total > budgets["extreme"]:
         res["notes"].append("over the Extreme budget")
     bad = any("do not use" in n for n in notes)
