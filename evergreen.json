@@ -1,0 +1,48 @@
+{
+  "evergreen": "1.0",
+  "name": "tablewright",
+  "kind": "plugin",
+  "main": "skills/tablewright/SKILL.md",
+  "files": {
+    "research": "RESEARCH.md",
+    "changelog": "CHANGELOG.md",
+    "learnings": "LEARNINGS.md",
+    "tests": "TESTS.md"
+  },
+  "protocol": "plugin",
+  "source": null,
+  "topic": "Tabletop RPG tooling: PF2e, SF2e and D&D 2024 encounter rules and errata, ORC and SRD licences, open-source sheet and encounter tools, TTRPG MCP servers, miniature printing",
+  "tier": "slow",
+  "interval_days": 60,
+  "last_checked": "2026-11-25",
+  "next_due": "2027-01-24",
+  "verify_at_use": false,
+  "volatile_claims": [
+    "SF2e encounter rules and errata",
+    "SRD 5.2 encounter tables",
+    "TTRPG MCP servers available"
+  ],
+  "contradiction": null,
+  "events": [],
+  "streak": {
+    "quiet": 0,
+    "pinned_min": 0,
+    "pinned_max": 0,
+    "vau_quiet": 0
+  },
+  "history": [
+    {
+      "date": "2026-11-25",
+      "m": null,
+      "interval_after": 60,
+      "note": "created"
+    }
+  ],
+  "counts": {
+    "learnings": 0,
+    "changes": 1,
+    "research": 1,
+    "tests": 1
+  },
+  "consolidate_every": 25
+}

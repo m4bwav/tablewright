@@ -1,0 +1,9 @@
+{
+  "skill": "tablewright",
+  "cases": [
+    {"id": "trigger-encounter", "kind": "trigger", "prompt": "Is a fight against two level 5 creatures too hard for my four level 3 Pathfinder 2e players?", "expect": "tablewright invoked; tt.py encounter run"},
+    {"id": "decoy-cards", "kind": "decoy", "prompt": "Check the cost curve of my deckbuilder's cards.", "expect": "tablewright NOT invoked (cardwright)"},
+    {"id": "action-encounter", "kind": "action", "prompt": "My D&D 2024 party is five level 4 characters. I planned an owlbear (CR 3) plus two wolves (CR 1/4). What difficulty is that, and what would make it High?", "expect": "tt.py encounter run; 800 XP, below Low (1250); High needs 2500, so about 1700 XP more"},
+    {"id": "action-tracker", "kind": "action", "prompt": "Start initiative: Kara 18 with 22 HP, Bandit 14 with 11 HP, Bandit Two 9 with 11 HP. Kara hits Bandit for 12. Advance to the next turn and show the order.", "expect": "tt.py tracker init, hit, next run; Bandit DOWN and skipped; turn on Bandit Two"}
+  ]
+}

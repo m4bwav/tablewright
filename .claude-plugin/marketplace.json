@@ -1,0 +1,5 @@
+{
+  "name": "tablewright",
+  "owner": {"name": "Mark Rogers"},
+  "plugins": [{"name": "tablewright", "source": "./", "description": "Encounter budgets, initiative tracker, character sheets for PF2e, SF2e and D&D 5e"}]
+}
