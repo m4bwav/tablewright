@@ -1,0 +1,5 @@
+roll,kind,difficulty,avoidable
+1-4,fight,easy,no
+5-6,fight,hard,no
+7-10,sight,,
+12,weather,,

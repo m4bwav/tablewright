@@ -155,3 +155,61 @@ def test_threads_latest_first_and_finale():
 def test_npc_cards():
     r = run("npcs", FX / "npcs.md")
     assert r.returncode == 1 and "Tov: want three parts" in r.stdout and "Ilse: hook has no why" in r.stdout and "Mera" not in r.stdout
+
+
+def test_encounter_mission_warnings():
+    _, d = enc("--system", "pf2e", "--level", "3", "--foe", "3", "--mission", "kill", "--healers", "1")
+    assert any("kill-only" in w for w in d["warnings"]) and any("heal" in w for w in d["warnings"])
+    _, d = enc("--system", "pf2e", "--level", "3", "--foe", "3", "--mission", "rescue")
+    assert any("no clock" in w for w in d["warnings"])
+    _, d = enc("--system", "pf2e", "--level", "3", "--foe", "3", "--mission", "hold", "--clock", "8")
+    assert any("1 to 5" in w for w in d["warnings"])
+    _, d = enc("--system", "pf2e", "--level", "3", "--foe", "3", "--mission", "hold", "--clock", "4")
+    assert d["warnings"] == []
+
+
+def test_fiveroom_warns_when_hard_fights_exceed_budget():
+    r = run("fiveroom", FX / "fiveroom_heavy.json")
+    assert r.returncode == 0 and "over one fight's budget" in r.stdout
+
+
+def test_table_flags_gaps_and_speed_bumps():
+    r = run("table", FX / "table_bad.csv")
+    assert r.returncode == 1 and "[11]" in r.stdout and "cannot avoid" in r.stdout and "fights fill" in r.stdout
+    r = run("table", FX / "table_ok.csv")
+    assert r.returncode == 0 and "d12" in r.stdout
+
+
+def test_item_drawback_tiers():
+    r = run("item", FX / "items.json")
+    assert r.returncode == 1 and "Lantern" in r.stdout and "Thorn Ring: no drawback" in r.stdout and "warn: Crown" in r.stdout
+
+
+def test_world_nation_society_city_cards():
+    r = run("world", FX / "world_nations.md")
+    assert r.returncode == 1 and "nation missing internal" in r.stdout and "city missing twist" in r.stdout
+    assert "society" not in r.stdout
+
+
+def test_prep_hazard_needs_warning():
+    r = run("prep", FX / "prep_hazard.md")
+    assert r.returncode == 1 and "gas pocket" in r.stdout and "rotten pier" not in r.stdout
+
+
+def test_fiveroom_puzzle_fields(tmp_path):
+    plan = json.loads((FX / "fiveroom_ok.json").read_text(encoding="utf-8"))
+    plan["party"] = 3
+    for x in plan["areas"]:
+        if x["role"] == "puzzle":
+            x.update(lock_in=True, min_players=5)
+            x.pop("fail_cost", None)
+    f = tmp_path / "p.json"
+    f.write_text(json.dumps(plan), encoding="utf-8")
+    r = run("fiveroom", f)
+    assert r.returncode == 1 and "no reset" in r.stdout and "needs 5 players" in r.stdout and "fail_cost" in r.stdout
+
+
+def test_prep_tells_and_false_leads():
+    r = run("prep", FX / "prep_tricks.md")
+    assert r.returncode == 1 and "lethal and hidden" in r.stdout and "no tell" in r.stdout
+    assert "2 false leads of 3" in r.stdout and "the mill (false)" in r.stdout and "the well" not in r.stdout.split("false lead with no ending")[-1]

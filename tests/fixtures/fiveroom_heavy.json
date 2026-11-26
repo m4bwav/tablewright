@@ -1,0 +1,8 @@
+{"fight_budget": 120,
+ "areas": [
+  {"role": "entrance", "mode": "talk"},
+  {"role": "puzzle", "mode": "explore", "solutions": ["a", "b"], "clue_in": 1},
+  {"role": "setback", "mode": "fight", "cost": "a torch goes out", "xp": 80},
+  {"role": "climax", "mode": "fight", "lever": "close the gate", "terrain": "bridge", "xp": 100},
+  {"role": "reward", "mode": "talk", "hook": "a map"}
+ ]}

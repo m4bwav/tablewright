@@ -18,6 +18,7 @@ Commands:
 Exit 2 is a usage or validation error.
 """
 import argparse
+import csv
 import json
 import os
 import sys
@@ -117,6 +118,7 @@ def cmd_encounter(a):
         res["notes"].append("above the High budget (2024 has no higher band): expect a character to drop")
     if a.system != "5e" and total > budgets["extreme"]:
         res["notes"].append("over the Extreme budget")
+    res["warnings"] = mission_warnings(a)
     bad = any("do not use" in n for n in notes)
     if a.json:
         print(json.dumps(res, indent=2))
@@ -127,7 +129,25 @@ def cmd_encounter(a):
         print(f"next band: {res['next']['threat']} needs {res['next']['xp_needed']} XP more")
     for n in res["notes"]:
         print("note: " + n)
+    for w in res["warnings"]:
+        print("warn: " + w)
     sys.exit(1 if bad else 0)
+
+
+def mission_warnings(a):
+    """Warnings for a fight that is only a damage race (no goal, no clock, foes that undo damage)."""
+    w = []
+    if a.mission is None:
+        return w
+    if a.mission == "kill":
+        w.append("kill-only mission: add a goal besides killing (rescue, hold, escape, steal, stop a ritual)")
+    elif a.clock is None:
+        w.append(f"{a.mission} mission has no clock: give it a round limit (--clock N)")
+    if a.clock is not None and not 1 <= a.clock <= 5:
+        w.append(f"clock of {a.clock} rounds; 1 to 5 keeps pressure on")
+    if a.healers:
+        w.append(f"{a.healers} foe(s) heal or grant temp HP: fights drag; cap it or make the healer a target")
+    return w
 
 
 def cmd_budget(a):
@@ -380,6 +400,21 @@ def cmd_prep(a):
     for f in bullets("fights"):
         if "out:" not in f.lower():
             warns.append(f"fight without a way to end early (add 'out: ...'): {f}")
+    for h in bullets("hazards"):
+        if "warned:" not in h.lower():
+            errs.append(f"hazard with no warning before players can prepare (add 'warned: where they learn of it'): {h}")
+    for x in bullets("fights") + bullets("hazards"):
+        lx = x.lower()
+        if "lethal" in lx and "hidden: yes" in lx:
+            errs.append(f"lethal and hidden: players get no fair chance; make it visible or weaker: {x}")
+        elif "lethal" in lx and "tell:" not in lx and "warned:" not in lx:
+            warns.append(f"lethal threat with no tell (add 'tell: the sign players can notice'): {x}")
+    false = [l for l in leads if "(false)" in l.lower()]
+    if false and len(false) >= len(leads) - len(false):
+        warns.append(f"{len(false)} false leads of {len(leads)}; keep them fewer than the real ones")
+    for l in false:
+        if "ends:" not in l.lower():
+            warns.append(f"false lead with no ending (add 'ends: how players learn it is a dead end'): {l}")
     for w in warns:
         print("warn: " + w)
     for e in errs:
@@ -399,6 +434,15 @@ def cmd_world(a):
     for t in traits:
         if ":" not in t or not t.split(":", 1)[1].strip():
             errs.append(f"trait not tied to a place, NPC or faction (write 'trait: where it shows'): {t}")
+    for k, one, need, why in (
+            ("nations", "nation", ("internal:", "external:"), "a conflict inside and one with a neighbour"),
+            ("societies", "society", ("leader:", "goal:", "rule:"), "a leader, a goal now and a reward or punishment rule"),
+            ("cities", "city", ("theme:", "food:", "shelter:", "shop:", "twist:"),
+             "one theme, a standout food, shelter and shop, and an unwelcome twist")):
+        for x in (l[2:].strip() for l in sec.get(k, []) if l[:2] in ("- ", "* ")):
+            miss = [n.rstrip(":") for n in need if n not in x.lower()]
+            if miss:
+                errs.append(f"{one} missing {', '.join(miss)} (wants {why}): {x.split(':', 1)[0]}")
     for e in errs:
         print("error: " + e)
     if errs:
@@ -448,7 +492,8 @@ FIVE = ["entrance", "puzzle", "setback", "climax", "reward"]
 
 def cmd_fiveroom(a):
     """Check an adventure plan against the five-role arc (entrance, puzzle, setback, climax, reward)."""
-    areas = json.loads(Path(a.plan).read_text(encoding="utf-8")).get("areas", [])
+    plan = json.loads(Path(a.plan).read_text(encoding="utf-8"))
+    areas, party = plan.get("areas", []), plan.get("party")
     errs, warns = [], []
     roles = [x.get("role") for x in areas]
     if not 3 <= len(areas) <= 10:
@@ -470,6 +515,13 @@ def cmd_fiveroom(a):
         if r == "puzzle":
             if len(x.get("solutions", [])) < 2:
                 errs.append(f"area {n}: puzzle needs at least 2 solutions")
+            if not x.get("fail_cost"):
+                warns.append(f"area {n}: puzzle has no fail_cost (what a wrong answer costs)")
+            if x.get("lock_in") and not x.get("reset"):
+                errs.append(f"area {n}: puzzle locks in with no reset; a stuck party cannot recover")
+            mp = x.get("min_players")
+            if mp and party and mp > party:
+                errs.append(f"area {n}: needs {mp} players, party has {party}")
             c = x.get("clue_in")
             if not isinstance(c, int) or not 1 <= c < n:
                 warns.append(f"area {n}: no clue planted in an earlier area (clue_in)")
@@ -480,10 +532,17 @@ def cmd_fiveroom(a):
                 errs.append(f"area {n}: climax needs a lever that is not damage")
             if not x.get("terrain"):
                 warns.append(f"area {n}: climax has no terrain that matters")
+            if x.get("immune") and not x.get("weakness"):
+                warns.append(f"area {n}: climax foe is immune ({x['immune']}) with no weakness to find in the room")
         if r == "reward" and not (x.get("twist") or x.get("hook")):
             warns.append(f"area {n}: reward has no twist or next hook")
     if len(areas) > 1 and areas[0].get("mode") and areas[0].get("mode") == areas[1].get("mode"):
         warns.append("areas 1 and 2 use the same mode; vary them (fight, talk, explore, puzzle)")
+    plan_budget = plan.get("fight_budget")
+    hard = sum(x.get("xp", 0) for x in areas if x.get("role") in ("setback", "climax"))
+    if plan_budget and hard > plan_budget:
+        warns.append(f"setback and climax fights total {hard} XP, over one fight's budget of {plan_budget}; "
+                     "the party meets them without a full rest")
     mins = sum(x.get("minutes", 0) for x in areas)
     if mins and not 120 <= mins <= 240:
         warns.append(f"{mins} minutes planned; one session is about 120 to 240")
@@ -496,6 +555,72 @@ def cmd_fiveroom(a):
     print(f"ok: {len(areas)} areas in five-role order")
 
 
+TIERS = ["minor", "moderate", "major", "legendary", "campaign"]
+YES = ("yes", "y", "true", "1")
+
+
+def roll_range(r):
+    lo, _, hi = r["roll"].strip().partition("-")
+    return int(lo), int(hi or lo)
+
+
+def cmd_table(a):
+    """Check a random encounter table CSV (roll,kind,difficulty,avoidable): gaps, fight share, unavoidable easy fights."""
+    with open(a.table, encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+    errs, warns, covered, fights = [], [], set(), 0
+    for r in rows:
+        lo, hi = roll_range(r)
+        span = set(range(lo, hi + 1))
+        if covered & span:
+            errs.append(f"roll {r['roll']} overlaps another row")
+        covered |= span
+        kind = r["kind"].strip().lower()
+        if kind == "fight":
+            fights += len(span)
+            if r.get("difficulty", "").strip().lower() in ("trivial", "easy", "low") and r.get("avoidable", "").strip().lower() not in YES:
+                warns.append(f"roll {r['roll']}: easy fight the party cannot avoid (a speed bump; make it avoidable)")
+    top = max(covered) if covered else 0
+    gaps = sorted(set(range(1, top + 1)) - covered)
+    if gaps:
+        errs.append(f"rolls with no row: {gaps[:10]}{' ...' if len(gaps) > 10 else ''}")
+    share = fights / top if top else 0
+    if share > a.max_fight:
+        warns.append(f"fights fill {share:.0%} of the table, over {a.max_fight:.0%}; travel should be mostly other things")
+    for w in warns:
+        print("warn: " + w)
+    for e in errs:
+        print("error: " + e)
+    if errs:
+        sys.exit(1)
+    print(f"ok: d{top} table, {len(rows)} rows, fights {share:.0%}")
+
+
+def cmd_item(a):
+    """Check magic items (JSON list) for a drawback at least as strong as the boon."""
+    items = json.loads(Path(a.items).read_text(encoding="utf-8"))
+    errs, warns = [], []
+    for it in items if isinstance(items, list) else [items]:
+        n, b, d = it.get("name", "?"), it.get("benefit_tier"), it.get("drawback_tier")
+        if b not in TIERS:
+            errs.append(f"{n}: benefit_tier must be one of {TIERS}")
+        elif not d:
+            errs.append(f"{n}: no drawback")
+        elif d not in TIERS:
+            errs.append(f"{n}: drawback_tier must be one of {TIERS}")
+        elif TIERS.index(d) < TIERS.index(b):
+            errs.append(f"{n}: {d} drawback under a {b} boon; random items inflate power")
+        elif d == "campaign":
+            warns.append(f"{n}: drawback changes the campaign; confirm you will run it and the players agree")
+    for w in warns:
+        print("warn: " + w)
+    for e in errs:
+        print("error: " + e)
+    if errs:
+        sys.exit(1)
+    print("ok: every boon has a matching drawback")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -506,6 +631,9 @@ def main(argv=None):
         s.add_argument("--level", type=int, required=True)
         if name == "encounter":
             s.add_argument("--foe", action="append", required=True, help="creature level (pf2e/sf2e) or CR (5e); repeat per foe")
+            s.add_argument("--mission", help="what the party must do: kill, rescue, hold, escape, steal, ritual...")
+            s.add_argument("--clock", type=int, help="rounds before the mission fails")
+            s.add_argument("--healers", type=int, default=0, help="foes that heal or grant temp HP")
         else:
             s.add_argument("--threat", default="moderate")
         s.add_argument("--json", action="store_true")
@@ -534,6 +662,10 @@ def main(argv=None):
     s.add_argument("card"); s.set_defaults(fn=cmd_world)
     s = sub.add_parser("fiveroom", help="check an adventure plan against the five-role arc")
     s.add_argument("plan"); s.set_defaults(fn=cmd_fiveroom)
+    s = sub.add_parser("table", help="check a random encounter table CSV")
+    s.add_argument("table"); s.add_argument("--max-fight", type=float, default=0.35); s.set_defaults(fn=cmd_table)
+    s = sub.add_parser("item", help="check magic items pair each boon with a drawback")
+    s.add_argument("items"); s.set_defaults(fn=cmd_item)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)

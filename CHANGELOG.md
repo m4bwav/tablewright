@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 (2026-11-26)
+- `tt.py table`: random encounter table check (roll gaps and overlaps, fight share, unavoidable easy fights). Idea from Nerzugal's Dungeon Master Toolkit (travel tables).
+- `tt.py item`: magic items pair each boon with an equal or stronger drawback. Idea from Nerzugal's Dungeon Master Toolkit.
+- `encounter --mission --clock --healers`: warnings for kill-only fights, missing or long clocks, and healing foes. Idea from How to Run Fast and Exciting Combats (2.02, 2.10).
+- `fiveroom`: puzzle `fail_cost`, `lock_in`/`reset`, `min_players`; climax `immune` without `weakness`; setback plus climax XP over `fight_budget`. Ideas from Nerzugal's Toolkit, Bill Webb's Book of Dirty Tricks and 5 Room Dungeons.
+- `prep`: `## Hazards` need a warning; lethal threats need a tell and may not be hidden; false leads fewer than real ones, each with an ending. Ideas from Nerzugal's Toolkit and Bill Webb's Book of Dirty Tricks.
+- `world`: optional nation (internal and external conflict), society (leader, goal, rule) and city (theme, food, shelter, shop, twist) cards. Idea from the Kobold Guide to Worldbuilding.
+- 7 new tests; wording and thresholds are ours and unverified.
+
 ## 0.3.0 (2026-11-26)
 - `tt.py world`: setting card check (6 to 8 traits, each anchored to a place, NPC or faction). Idea from Shea, The Lazy Dungeon Master (ch. XIV).
 - `tracker --public`: players' board with damage taken and no HP; `+` marks who is on deck. Ideas from The Lazy Dungeon Master and Johnn Four, How to Run Fast and Exciting Combats (3.04).
