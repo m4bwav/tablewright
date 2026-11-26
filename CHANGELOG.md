@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.10.0 (2026-11-26)
+- `tt.py safety`: optional `comfort` per player and topic (none, offscreen, limited, full) and `planned` levels; each topic takes the lowest player's level and a planned level above it fails. Idea from the D&D 3.5 Advanced GM guide (Dungeon Master's Guide II era, "Sensitive Subjects"). Empty `takebacks` or `info_flow` warn; idea from the D&D 3.5 Dungeon Master's Guide.
+- `tt.py battle plan.json [--results]`: a mass battle played as three representative fights, each with a shape and a carry-over for a win, and a five-step result. Idea from the D&D 3.5 Advanced GM guide.
+- `tt.py tracker init --timer N` and `tracker late`: a per-turn timer that delays a player who runs out. Idea from the D&D 3.5 Advanced GM guide.
+- `session-log` gains `## Highlights` and `## Weak points`; `tt.py review logs` tallies them per player. Idea from the D&D 3.5 Dungeon Master's Guide.
+- `tt.py prep`: `## Players` with `for:` tags (every player gets a moment) and `likely:` triage tags, from the D&D 3.5 Dungeon Master's Guide; `diff:` tags warn on a session with no easy or no hard fight, from the D&D 4e Dungeon Master's Guide.
+- `tt.py houserules rules.json`: every rule needs a why; removals want an offset. Idea from the D&D 3.5 Dungeon Master's Guide.
+- `tt.py fiveroom`: a climax may carry `tiers` (minimum, middle, full); warns on fewer than three or a minimum that needs a kill. Idea from the D&D 3.5 Advanced GM guide.
+- `tt.py challenge card.json`: a skill challenge (goal, successes before failures, mixed skill kinds, a failure route, a shown score) from the D&D 4e Dungeon Master's Guide, with an optional progress pool, milestones and time limit from the Fallout 2d20 GM toolkit.
+- `tt.py travel`: days and fatigue for an overland trip from pace, terrain, hours and route knowledge. Idea from the Fallout 2d20 GM toolkit; multipliers are ours.
+- `tt.py table`: optional `when` column (moving, camped, any); all one state warns. Idea from the Fallout 2d20 GM toolkit.
+- 10 new tests; all wording, steps and multipliers are ours and unverified.
+- Skipped: faction reputation ladder (`heat standing` already covers it), scavenging-site builder (low checkable value), monster-role count per fight (needs a role field on every foe; later), single-path gate check (`mystery` covers most of it), cut scenes with consent, session-log recap line, 2d10 variance note (ludowright's).
+
 ## 0.9.0 (2026-11-26)
 - `tt.py strength LEVELS --target-level N [--target-size 5]`: average party level (.5 rounds up) and a five-step strength label from headcount and level against the target; fails under 3 or over 7 players. Idea from the Adventurers League DM Guide 2.0.
 - `tt.py loot file.json [--seed]`: gold split evenly with the remainder named; permanent items go to the agreed PC, else the interested PC with the fewest permanent items, ties by a seeded roll; consumables do not count. Idea from the Adventurers League DM Guide 2.0.
