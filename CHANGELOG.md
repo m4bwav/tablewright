@@ -6,7 +6,10 @@
 - `tt.py district FILE`: city district cards with watch strength, bribe cost, gate and curfew rules and the block's owner; warns on missing fields and prints a one-line card each. Idea from the Lankhmar GM guide (AD&D 2e).
 - `tt.py chase [--lead --escape --rounds --table --seed]`: a seeded city pursuit, opposed d6 per round plus a complication from a built-in list or the user's table, ending when caught or escaped. Idea from the Lankhmar GM guide.
 - `encounter --foe 3:brute` (or `"3 role:brute"`): foe roles, a role count, and a warning when 4 or more foes all share one role. Idea from the D&D 4e Dungeon Master's Guide.
-- 5 new tests; all wording, steps and numbers are ours and unverified.
+- `tt.py prep`: fights and hazards may carry `treat:` (an edge the party can find); a fight with `threat:` or `diff:` but no `timer:`/`clock:` and no treat warns. Idea from ICRPG Master Edition (Runehammer), pp. 92-93.
+- `tt.py prep`: a fight rated harder than the one before, or a climax, warns when it turns fewer than two of damage, disruption (`hazard:`, `terrain:`) and duration (`timer:`, `clock:`); `levers:` names them outright. Idea from ICRPG Master Edition, pp. 94-95.
+- `session-log` gains an `ending:` line (countdown, hook, choice, ran-long); `tt.py review` counts endings by kind and warns when most ran long. Idea from ICRPG Master Edition, p. 82.
+- 7 new tests; all wording, steps and numbers are ours and unverified.
 
 ## 0.10.0 (2026-11-26)
 - `tt.py safety`: optional `comfort` per player and topic (none, offscreen, limited, full) and `planned` levels; each topic takes the lowest player's level and a planned level above it fails. Idea from the D&D 3.5 Advanced GM guide (Dungeon Master's Guide II era, "Sensitive Subjects"). Empty `takebacks` or `info_flow` warn; idea from the D&D 3.5 Dungeon Master's Guide.

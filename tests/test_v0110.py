@@ -61,3 +61,28 @@ def test_encounter_roles():
             "--foe", "1:brute", "--foe", "1")
     assert "artillery 1" in r.stdout and "none 1" in r.stdout and "all brute" not in r.stdout
     assert "threat" in r.stdout
+
+
+PREP = "## Opening\nrain\n\n## Leads\n- a\n- b\n- c\n\n## NPCs\n- Vel: the key\n\n## Fights\n"
+
+
+def test_prep_treat_and_levers(tmp_path):
+    f = tmp_path / "p.md"
+    f.write_text(PREP + "- rats; out: flee; diff: easy; treat: oil jar\n"
+                 "- ogre; out: bribe; diff: hard; damage: big club\n", encoding="utf-8")
+    r = run("prep", f)
+    assert "harder fight turns 1 lever(s) (damage)" in r.stdout
+    assert "no timer and no treat" in r.stdout and "rats" not in r.stdout.split("no timer and no treat")[1].split("\n")[0]
+    f.write_text(PREP + "- rats; out: flee; diff: easy; treat: oil jar\n"
+                 "- ogre; out: bribe; diff: hard; damage: big club; timer: 4 rounds\n"
+                 "- climax duel; out: yield; levers: damage, disruption, duration; treat: high ground\n", encoding="utf-8")
+    r = run("prep", f)
+    assert r.returncode == 0 and "lever" not in r.stdout and "no treat" not in r.stdout
+
+
+def test_session_endings(tmp_path):
+    assert "ending:" in run("session-log").stdout
+    for i, e in enumerate(["hook", "ran-long", "hook"]):
+        (tmp_path / f"s{i}.md").write_text(f"## Next opening\n- ending: {e}\n", encoding="utf-8")
+    r = run("review", *sorted(tmp_path.glob("s*.md")))
+    assert r.returncode == 0 and "endings: hook 2, ran-long 1" in r.stdout

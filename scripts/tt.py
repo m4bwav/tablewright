@@ -503,6 +503,10 @@ def tag(text, key):
     return ""
 
 
+DIFF_RANK = {"trivial": 0, "easy": 1, "low": 1, "moderate": 2, "hard": 3, "high": 3, "severe": 4, "deadly": 4, "extreme": 5}
+LEVERS = {"damage": ("damage",), "disruption": ("hazard", "terrain"), "duration": ("timer", "clock")}
+
+
 def cmd_prep(a):
     """Check a session card: an opening, N leads, NPCs that each want something, fights with a way out."""
     sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
@@ -561,6 +565,22 @@ def cmd_prep(a):
             warns.append("no easy fight among the rated ones; give the party a fight to feel strong in")
         if not set(diffs) & {"hard", "severe", "extreme", "high", "deadly"}:
             warns.append("no hard fight among the rated ones; one should test them")
+    prev = None
+    for f in bullets("fights"):
+        timed = tag(f, "timer") or tag(f, "clock")
+        if (tag(f, "threat") or tag(f, "diff")) and not timed and not tag(f, "treat"):
+            warns.append(f"fight with a threat but no timer and no treat (add 'timer: ...' or 'treat: an edge they can find'): {f}")
+        rank = DIFF_RANK.get(tag(f, "diff"), None)
+        harder = "climax" in f.lower() or (rank is not None and prev is not None and rank > prev)
+        if harder:
+            lv = {x.strip() for x in tag(f, "levers").split(",") if x.strip()}
+            if not lv:
+                lv = {k for k, keys in LEVERS.items() if any(tag(f, t) for t in keys)}
+            if len(lv) < 2:
+                warns.append(f"harder fight turns {len(lv)} lever(s) ({', '.join(sorted(lv)) or 'none'}); "
+                             f"raise two of damage, disruption, duration: {f}")
+        if rank is not None:
+            prev = rank
     false = [l for l in leads if "(false)" in l.lower()]
     if false and len(false) >= len(leads) - len(false):
         warns.append(f"{len(false)} false leads of {len(leads)}; keep them fewer than the real ones")
@@ -661,7 +681,9 @@ SESSION_LOG = """# Session {n} log
 
 ## Next opening
 - where the next session starts
+- ending: countdown | hook | choice | ran-long (how this session stopped)
 """
+ENDINGS = ("countdown", "hook", "choice", "ran-long")
 
 
 def cmd_sessionlog(a):
@@ -1425,9 +1447,17 @@ def cmd_battle(a):
 
 def cmd_review(a):
     """Merge '## Highlights' and '## Weak points' from session logs into a per-player tally."""
-    hi, weak, fixes = {}, {}, []
+    hi, weak, fixes, ends = {}, {}, [], {}
     for f in a.logs:
-        sec = prep_sections(Path(f).read_text(encoding="utf-8"))
+        text = Path(f).read_text(encoding="utf-8")
+        for line in text.splitlines():
+            k, _, v = line.lstrip("-* ").partition(":")
+            v = v.strip().lower()
+            if k.strip().lower() == "ending" and v and "|" not in v:
+                ends[v] = ends.get(v, 0) + 1
+                if v not in ENDINGS:
+                    print(f"warn: {f}: ending {v!r}, use " + ", ".join(ENDINGS))
+        sec = prep_sections(text)
         for key, tally in (("highlights", hi), ("weak points", weak)):
             for line in sec.get(key, []):
                 if line[:2] not in ("- ", "* "):
@@ -1440,6 +1470,12 @@ def cmd_review(a):
                 if key == "weak points":
                     fixes.append(f"{parts[0]}: {parts[3] if len(parts) > 3 and parts[3] else 'no fix written'}")
     people = sorted(set(hi) | set(weak))
+    if ends:
+        print("endings: " + ", ".join(f"{k} {v}" for k, v in sorted(ends.items())))
+        if ends.get("ran-long", 0) * 2 > sum(ends.values()):
+            print("warn: most sessions ran long instead of stopping on a planned ending")
+    if not people and ends:
+        return
     if not people:
         die("no filled Highlights or Weak points bullets in those logs")
     for who in people:
