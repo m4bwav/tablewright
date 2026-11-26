@@ -1560,7 +1560,7 @@ TIERS = ["minor", "moderate", "major", "legendary", "campaign"]
 YES = ("yes", "y", "true", "1")
 
 
-ITEM_NEW = ("cost_axis", "uses", "unpredictable", "bypasses", "friction")
+ITEM_NEW = ("cost_axis", "uses", "unpredictable", "bypasses", "friction", "breaks_after")
 COST_AXES = ["coin", "body", "mind", "time", "social", "risk", "none"]
 USES = ["at-will", "per-day", "charges", "once"]
 
@@ -1840,6 +1840,11 @@ def cmd_item(a):
                 errs.append(f"{n}: uses must be one of {USES}")
             if it.get("unpredictable") and it.get("uses") == "at-will":
                 warns.append(f"{n}: unpredictable at will; players will spam it until it fires right, limit the uses")
+            if it.get("breaks_after") is not None:
+                if not isinstance(it["breaks_after"], int) or it["breaks_after"] < 1:
+                    errs.append(f"{n}: breaks_after must be a whole number of failures per rest, 1 or more")
+                elif not it.get("save"):
+                    warns.append(f"{n}: breaks_after with no save; say what roll counts as a failure")
             if it.get("bypasses") and not it.get("friction"):
                 errs.append(f"{n}: bypasses {', '.join(it['bypasses'])} with no friction; it erases that part of the game")
     for w in warns:
@@ -4546,6 +4551,183 @@ def cmd_doomtrack(a):
     report(errs, warns, f"{len(spaces)} spaces, {len(scenes)} scenes, worst-case scene cost {worst}")
 
 
+def cmd_rumors(a):
+    """Rumour or lead list JSON: each lead has a skill, a dc, what it reveals and where it points; mixed skills and DCs."""
+    d = load_json(a.file)
+    leads = d.get("leads") if isinstance(d, dict) else d
+    errs, warns = [], []
+    if not leads:
+        die("no leads")
+    for i, l in enumerate(leads, 1):
+        n = l.get("name", f"lead {i}")
+        for k in ("reveals", "points_to"):
+            if not l.get(k):
+                errs.append(f"{n}: no {k}")
+        if not l.get("free") and (not l.get("skill") or not isinstance(l.get("dc"), int)):
+            errs.append(f"{n}: needs a skill and an integer dc, or free: true")
+        if l.get("gives_answer"):
+            warns.append(f"{n}: gives the answer away; make it a clue toward it")
+    skills = {l.get("skill") for l in leads if l.get("skill")}
+    dcs = {l.get("dc") for l in leads if isinstance(l.get("dc"), int)}
+    if len(leads) > 1 and len(skills) < 2:
+        errs.append("every lead uses one skill; spread them over 2+ so more players can find one")
+    if len(leads) > 1 and len(dcs) < 2:
+        warns.append("every lead has the same dc; mix easy and hard ones")
+    if not any(l.get("free") for l in leads):
+        errs.append("no free lead (no roll): a failed set of checks must still point somewhere")
+    facts = d.get("facts") if isinstance(d, dict) else None
+    for f in facts or []:
+        c = sum(1 for l in leads if l.get("reveals") == f)
+        if c < 2:
+            errs.append(f"fact {f!r}: {c} lead(s); give each key fact 2+ so one missed roll does not hide it")
+    if facts:
+        share = sum(1 for l in leads if l.get("reveals") in facts) / len(leads)
+        if not 0.3 <= share <= 0.7:
+            warns.append(f"{share:.0%} of leads point at key facts; keep it between 30% and 70% (the rest colour and false leads)")
+    report(errs, warns, f"{len(leads)} leads over {len(skills)} skills and {len(dcs)} dcs")
+
+
+def cmd_burst(a):
+    """Party round-one damage JSON against one target: expected damage with hit chance, first-strike bonus, HP share."""
+    d = load_json(a.file)
+    t = d.get("target") or {}
+    ac, hp = t.get("ac"), t.get("hp")
+    if not isinstance(ac, int) or not isinstance(hp, int) or hp < 1:
+        die("target needs integer ac and hp")
+    total = 0.0
+    attackers = d.get("attackers") or []
+    if not attackers:
+        die("no attackers")
+    for at in attackers:
+        p = min(0.95, max(0.05, (21 - (ac - at.get("bonus", 0))) / 20))
+        dmg = at.get("damage", 0) + (at.get("first_strike", 0) if at.get("acts_first", True) else 0)
+        e = p * dmg * at.get("attacks", 1)
+        total += e
+        print(f"  {at.get('name', '?')}: {p:.0%} to hit, {e:.1f} expected")
+    share = total / hp
+    errs, warns = [], []
+    if share >= 1:
+        errs.append(f"round one expects {total:.1f} of {hp} HP; the target dies before it acts")
+    elif share >= 0.75:
+        warns.append(f"round one expects {total:.1f} of {hp} HP ({share:.0%}); it may never act")
+    report(errs, warns, f"round one expects {total:.1f} of {hp} HP ({share:.0%})")
+
+
+def cmd_rollout(a):
+    """Staged rollout JSON for disruptive content (rumour, remnant, teacher): 3+ stages in session order, each with a gate."""
+    d = load_json(a.file)
+    st = d.get("stages") or []
+    errs, warns = [], []
+    if len(st) < 3:
+        errs.append(f"{len(st)} stages; bring disruptive content in over 3+ (rumour, remnant, teacher)")
+    last = 0
+    for x in st:
+        n, ses = x.get("name", "?"), x.get("session")
+        if not isinstance(ses, int):
+            errs.append(f"{n}: no session number")
+        elif ses <= last:
+            errs.append(f"{n}: session {ses} not after {last}")
+        else:
+            last = ses
+        if not x.get("gate"):
+            errs.append(f"{n}: no gate (what the players must do to reach the next stage)")
+    if not d.get("off_switch"):
+        warns.append("no off_switch: say how the GM can stop the rollout if the table dislikes it")
+    report(errs, warns, f"{len(st)} stages over sessions up to {last}")
+
+
+def cmd_recurring(a):
+    """Recurring villain JSON: a stage per act, threat rising, an escape on every stage but the last, an end condition."""
+    d = load_json(a.file)
+    st = d.get("stages") or []
+    errs, warns = [], []
+    if len(st) < 2:
+        die("need 2+ stages")
+    acts = d.get("acts")
+    if isinstance(acts, int) and len({x.get("act") for x in st}) < acts:
+        warns.append(f"stages cover {len({x.get('act') for x in st})} of {acts} acts")
+    prev = None
+    for i, x in enumerate(st):
+        n, th = x.get("name", f"stage {i + 1}"), x.get("threat")
+        if not isinstance(th, (int, float)):
+            errs.append(f"{n}: no numeric threat")
+        elif prev is not None and th <= prev:
+            errs.append(f"{n}: threat {th} not above the stage before ({prev})")
+        else:
+            prev = th
+        if i < len(st) - 1 and not x.get("escape"):
+            errs.append(f"{n}: no escape; say how the villain gets away so the return is fair")
+    if st[-1].get("escape"):
+        warns.append("the last stage has an escape; the final meeting should be able to end it")
+    if not d.get("ends_when"):
+        errs.append("no ends_when: what finally stops the villain")
+    report(errs, warns, f"{len(st)} stages, threat rising")
+
+
+def cmd_casefile(a):
+    """Investigation case file JSON: leads with closed_by, minutes, beat and points_to; fits the slot, beats vary."""
+    d = load_json(a.file)
+    leads = d.get("leads") or []
+    errs, warns = [], []
+    if not leads:
+        die("no leads")
+    total, prev = 0, None
+    for i, l in enumerate(leads, 1):
+        n = l.get("name", f"lead {i}")
+        if not l.get("closed_by"):
+            errs.append(f"{n}: nothing closes it (closed_by)")
+        if not l.get("points_to") and i < len(leads):
+            warns.append(f"{n}: points nowhere; say which lead it opens")
+        total += l.get("minutes", 0)
+        b = l.get("beat")
+        if b and b == prev:
+            warns.append(f"{n}: second {b} beat in a row; vary talk, fight and explore")
+        prev = b
+    slot = d.get("slot_minutes")
+    if isinstance(slot, int) and total > slot:
+        warns.append(f"leads take {total} minutes of a {slot}-minute slot")
+    report(errs, warns, f"{len(leads)} leads, {total} minutes")
+
+
+def cmd_lore(a):
+    """Knowledge-check ladder JSON: 3 to 5 tiers, DCs rising by 5, one tier that turns the lower ones around."""
+    d = load_json(a.file)
+    tiers = d.get("tiers") if isinstance(d, dict) else d
+    errs, warns = [], []
+    if not tiers or not 3 <= len(tiers) <= 5:
+        errs.append(f"{len(tiers or [])} tiers; use 3 to 5")
+    dcs = [t.get("dc") for t in tiers or []]
+    for x, y in zip(dcs, dcs[1:]):
+        if not (isinstance(x, int) and isinstance(y, int)) or y - x != 5:
+            errs.append(f"dc {x} then {y}; step each tier up by 5")
+    for t in tiers or []:
+        if not t.get("reveals"):
+            errs.append(f"dc {t.get('dc')}: no reveals")
+    if tiers and not any(t.get("twist") for t in tiers[1:]):
+        warns.append("no tier with twist: true; a high roll should change what the lower tiers meant")
+    report(errs, warns, f"{len(tiers or [])} tiers")
+
+
+def cmd_arc(a):
+    """Adventure arc JSON: chapters with level and gold; levels never drop, rise at most 2 a chapter, finale gold share."""
+    d = load_json(a.file)
+    ch = d.get("chapters") or []
+    errs, warns = [], []
+    if not ch:
+        die("no chapters")
+    for x, y in zip(ch, ch[1:]):
+        lx, ly = x.get("level"), y.get("level")
+        if isinstance(lx, int) and isinstance(ly, int):
+            if ly < lx:
+                errs.append(f"{y.get('name', '?')}: level {ly} below the chapter before ({lx})")
+            elif ly - lx > 2:
+                warns.append(f"{y.get('name', '?')}: level jumps {ly - lx}; at most 2 a chapter")
+    gold = sum(c.get("gold", 0) for c in ch)
+    if gold and ch[-1].get("gold", 0) > gold / 2:
+        warns.append(f"finale holds {ch[-1].get('gold', 0)} of {gold} gold; players cannot spend it during the adventure")
+    report(errs, warns, f"{len(ch)} chapters, {gold} gold")
+
+
 def cmd_hazard(a):
     """Multi-problem hazard round JSON: counters rising each round, deadlines, a goal and an order to read them out."""
     import math
@@ -5149,6 +5331,20 @@ def main(argv=None):
     s.add_argument("--killed", type=int, default=0); s.add_argument("--fled", type=int, default=0)
     s.add_argument("--file", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "carry.json"))
     s.set_defaults(fn=cmd_carry)
+    s = sub.add_parser("rumors", help="check a lead list: skill, dc, reveals, points_to, a free lead, 2+ per key fact")
+    s.add_argument("file"); s.set_defaults(fn=cmd_rumors)
+    s = sub.add_parser("burst", help="party round-one expected damage against one target")
+    s.add_argument("file"); s.set_defaults(fn=cmd_burst)
+    s = sub.add_parser("rollout", help="check a staged rollout of disruptive content over sessions")
+    s.add_argument("file"); s.set_defaults(fn=cmd_rollout)
+    s = sub.add_parser("recurring", help="check a recurring villain: stages, rising threat, escapes, end condition")
+    s.add_argument("file"); s.set_defaults(fn=cmd_recurring)
+    s = sub.add_parser("casefile", help="check an investigation case file: closers, minutes, beats, links")
+    s.add_argument("file"); s.set_defaults(fn=cmd_casefile)
+    s = sub.add_parser("lore", help="check a knowledge-check ladder: 3-5 tiers, DCs up by 5, a twist tier")
+    s.add_argument("file"); s.set_defaults(fn=cmd_lore)
+    s = sub.add_parser("arc", help="check an adventure arc: levels per chapter, finale gold share")
+    s.add_argument("file"); s.set_defaults(fn=cmd_arc)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)

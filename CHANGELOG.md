@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.20.0 (2026-11-26)
+- `tt.py rumors` (skills and DCs mixed, a free lead, 2+ leads per key fact, 30-70% of leads on key facts). Idea from A Crown for Strahd, p. 2, and WK1 Caves of the Kobold Queen, pp. 5-7.
+- `tt.py recurring` (stages per act, rising threat, an escape until the last stage, an end condition). Idea from WK2 Curse of the Kobold Eye.
+- `tt.py burst` (round-one expected damage against one target), `tt.py rollout` (disruptive content over 3+ gated sessions) and `item` `breaks_after`. Idea from The Marksman, pp. 2-7.
+- `tt.py casefile` (leads with closers, minutes and varied beats against the slot). Idea from CORE 2-1 Tales of Good & Evil.
+- `tt.py lore` (knowledge ladder, DCs up by 5, a twist tier) and `tt.py arc` (chapter levels and finale gold). Idea from Shadow of the Flame and Shadowed Eye of Halagar.
+- tt.py back to LF line endings.
+- All thresholds are ours; no book text or tables copied. 8 new tests (204 total).
+
 ## 0.19.0 (2026-11-26)
 - `tt.py doomtrack` (spaces with an event and a `shown_by`, `advance_on`, scene `fail_cost` and `cap`, worst-case cost against the track, an `outcomes` finale per mix of solved `paths`), `tt.py hazard` (multi-problem round: counters with cap round, `lowered_by`, deadlines, `order`) and `challenge` `tiers` (graded gains, botch), timed `complications` (`warning`, `removes` with a `stop`) and expected rounds at an average roll. Idea from CORE: A Hole in the World, pp. 7-10, 13, 18-22, 26.
 - `chase --legs FILE [--start LEG] [--party N] [--bonus N]`, `alert noise` and `alert waves --since-alarm R --schedule` (COUNTxFOE entries count XP through the encounter wave code), and `rooms` infiltration lint (an `objective` with under 2 `paths`, a `rolls` entry with no `on_fail`). Idea from CORE: Cog in the Wheel, pp. 18-29.
