@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.24.0 (2026-11-26)
+- `rooms --keys` gates: room `requires: [a, b]` (multi-key hub gate), dict locks with `clue_in: ROOM` (warns when the clue is not reachable before the lock), `locked_until: EVENT` (warns on an event no room raises, and on `locked: true` with neither key nor event). `rooms --pieces`: `piece_of` items must lie before their puzzle room. Ideas inspired by Dungeons on Demand / EN5IDER: Out for Blood, pp. 5, 18; Silver Linings, pp. 5, 19; If Looks Could Kill, pp. 12, 14, 19; Time & Time Again, p. 11.
+- `tt.py objective FILE --gate FLAG:N --kill-list a,b,c`: boss after N flags (unreachable flag rooms warn), any-order kill list revealed on the last kill. Same sources.
+- `encounter --protect OBJ:COUNT:HP --attackers N:DMG`: round each object breaks under fixed damage. Idea inspired by That Sinking Feeling, p. 24.
+- `encounter --waves`: the fight and its `--wave` entries as one no-rest day against 3 x moderate (our number). Ideas inspired by Eyes on the Prize, p. 23, and Best Served Cold, p. 27.
+- `tt.py rest --interrupt T --step S`: hourly d20 interruption odds, target dropping each quiet hour, expected first event. Idea inspired by No Laughing Matter, p. 5.
+- `rumors` quest mode `{quests, rumors}`: each rumour needs `quest` and `true: yes|no|later`; unknown quests and quests with no rumour warn. Idea inspired by Holdenshire Act 1, pp. 4-5.
+- `chase --stations N [--pursuer B --quarry B]`: hourly opposed d20 track rolls move the lead; exact catch odds and a seeded sample (added as a chase mode, not a new command). Idea inspired by Holdenshire Act 1, pp. 23-25.
+- All numbers are ours; no book text copied. 8 new tests (222 total).
+
 ## 0.23.0 (2026-11-26)
 - `tt.py xp-gap --party N --level L --award X [--each] [--xp a,b]`: per PC, does the adventure's XP reach the next level and by how much (5e advancement from SRD 5.2.1, CC-BY-4.0). Idea from Dungeons on Demand: Eyes on the Prize, pp. 5, 27.
 - `rooms`: a `roleplay: true` room with no `fallback` dice check warns. Idea from Dungeons on Demand: No Laughing Matter, p. 32.
