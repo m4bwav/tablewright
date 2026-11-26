@@ -2,7 +2,7 @@
 
 ![tablewright banner](.github/images/banner.jpg)
 
-Tabletop RPG table work, as a Claude Code plugin, for Pathfinder 2e, Starfinder 2e and D&D 5e (2024). It checks a planned fight against the encounter budget, runs initiative and hit points at the table, turns a character into a one-page sheet, and routes character builds, battle maps and printable miniatures to the tools that make them.
+Tabletop RPG table work, as an agent plugin, for Pathfinder 2e, Starfinder 2e and D&D 5e (2024). It checks a planned fight against the encounter budget, runs initiative and hit points at the table, turns a character into a one-page sheet, and routes character builds, battle maps and printable miniatures to the tools that make them.
 
 ## What it does
 
