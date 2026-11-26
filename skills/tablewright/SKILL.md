@@ -76,6 +76,17 @@ Comfort levels: a safety plan may add `comfort` ({player: {topic: none|offscreen
 - Mobs: `tt.py mob --count 6 --hp-each 5 7 2 5` (each hit of 5+ drops one; routs at half or fewer).
 - Hacking: `tt.py hack --system own|simple|secure --mods wired remote`; easy and hard mods cancel in pairs.
 - Settlements: `tt.py settlement card.json` (`size` thorp|hamlet|village|small town|large town|small city|large city|metropolis, `population`, `civic`, `inns`, `function`, `businesses`) checks our band ranges (20, 100, 1000, 2500, 6000, 12000, 25000, more), the civic kit (hamlet+ authority; village+ council, defence, hall; town+ walls and 2+ inns) and function kits (trade hub: lodging, stables, smith).
+- XP (0.14.0): `tt.py xp xp.json` (`party` [{`name`, `level`, `xp_to_next`, `alive`}], `foes` [{`name`, `xp`, `faced`, `overmatched`, `outcome` killed|surrendered|routed|persuaded, `group`}], `story`): faced, not overmatched foes count, a routed group once; the story award may not top the foe XP or 1/10 of any PC's `xp_to_next`; the total splits among survivors.
+- Morale: `tt.py morale --rating 12 --mod leader=2 --mod losses=-3 --seed 4` (2d10 over the modified rating breaks; `--roll` for a table roll).
+- Awards: `tt.py awards s1.md s2.md s3.md` reads `award: player | kind | ability | reason | xp`, `milestone: player` and `coins: player N` lines, oldest log first.
+- Loot owner: `loot` files may add `owner` {`intelligent`, `can_use` [item names], `random`}; items may carry `usable` and `magic`.
+- Rooms: `tt.py rooms rooms.json` (`rooms` [{`name`, `timer`, `threat`, `treat`, `stake`, `wonder`, `enemies`, `difficulty`, `damage`, `disruption`, `duration` 1-6}]).
+- Clocks: `tt.py tracker clock Fuse 3 --unit turn`, `tracker clock tick Fuse --fail`; at 0 the clock fires.
+- Session end: `tt.py session-end --seed 3 --die 6 --drop 1 --players Ann,Bo,Cy`.
+- Resize: `tt.py resize --level 3 --party 4 --foe 3:soldier --foe 3:controller --to 3` (adds brutes, soldiers; cuts controllers, skirmishers; a lone solo needs a level change).
+- Target: `tt.py target pcs.json --smart --seed 1` (`pcs` [{`name`, `marked`, `threat`, `reach`}]).
+- Prep pacing: `prep --hours 4 [--learning]` (1 fight an hour, 0.75 for new players; a 4e-grid number, our default), `prep --first` (`## Prologue`, `## Intros` with `bond:`), else `## Recap`.
+- Playtests: `tt.py playtest log.json` (`new_group`, `questions` [{`text`, `answered`, `section`}], `debrief` {`fun`, `trouble`, `improvements`}, `player_counts`).
 - Favors: `tt.py favor --relation friend --risk moderate --seed 3` rolls d100 against our odds (acquaintance 30, business 50, friend 75; minus 15 or 30 for risk) and names the favor owed back; low risk is never major.
 
 ## Adventure structure
