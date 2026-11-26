@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.21.0 (2026-11-26)
+- `morale --leader-cumulative N [--seed S]`: after the leader falls, flee chance +N% a round; per-round cumulative odds (to 100% or 10 rounds) and a seeded d100 per round naming the round they flee. Idea from DD2 Stealing the Night Away, p. 5.
+- `encounter --boss-dpr X --pc-hp a,b,c`: warns when the boss's all-hit damage a round drops the lowest PC from full, and suggests healing or a buffer first. `--pc-hp` now takes a list (the lowest counts). Idea from Dungeons on Demand: Devils in the Details, p. 24.
+- `rooms --keys`: rooms may give `locks` and `keys` (and `exits` for reachability from the first room); flags a lock with no key, a key with no lock, a key in the room it unlocks, and a key reachable only through its own lock. Idea from Dungeons on Demand: The Stuff of Nightmares, p. 24.
+- All thresholds are ours; no book text copied. 4 new tests (208 total).
+
 ## 0.20.0 (2026-11-26)
 - `tt.py rumors` (skills and DCs mixed, a free lead, 2+ leads per key fact, 30-70% of leads on key facts). Idea from A Crown for Strahd, p. 2, and WK1 Caves of the Kobold Queen, pp. 5-7.
 - `tt.py recurring` (stages per act, rising threat, an escape until the last stage, an end condition). Idea from WK2 Curse of the Kobold Eye.
