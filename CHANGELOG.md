@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.19.0 (2026-11-26)
+- `tt.py doomtrack` (spaces with an event and a `shown_by`, `advance_on`, scene `fail_cost` and `cap`, worst-case cost against the track, an `outcomes` finale per mix of solved `paths`), `tt.py hazard` (multi-problem round: counters with cap round, `lowered_by`, deadlines, `order`) and `challenge` `tiers` (graded gains, botch), timed `complications` (`warning`, `removes` with a `stop`) and expected rounds at an average roll. Idea from CORE: A Hole in the World, pp. 7-10, 13, 18-22, 26.
+- `chase --legs FILE [--start LEG] [--party N] [--bonus N]`, `alert noise` and `alert waves --since-alarm R --schedule` (COUNTxFOE entries count XP through the encounter wave code), and `rooms` infiltration lint (an `objective` with under 2 `paths`, a `rolls` entry with no `on_fail`). Idea from CORE: Cog in the Wheel, pp. 18-29.
+- `tt.py site` (site prep card with an optional `clock` of `turns` and `signs`). Idea from Dungeons on Demand: Dungeon Delves, pp. 4-12.
+- `tt.py interrogate` (DC ladder with truth tags), `encounter --exit` (above the top band with no exit warns) and `tt.py carry` (carry-over foes per group, fleers as a return wave). Idea from the Crow's Rest adventure, pp. 10-15.
+- `table combine --filter key=value` (blank or `any` cells always match). Idea from a fan booklet of monster tables, p. 3.
+- All thresholds are ours; no book text or tables copied. 11 new tests (196 total).
+
 ## 0.18.0 (2026-11-26)
 - `campaign`: `link` per adventure, a plan `guide`, level gating with `warned`, and `motif` beats; `villain` `goal:`/`meet:` coverage. Idea from a Curse of Strahd guide.
 - `mystery` `schedule` (lead_from, partial, ascending times), `tt.py groupcheck` and `tt.py threshold`; hazard rider advice. Idea from A Scream in the Night.
