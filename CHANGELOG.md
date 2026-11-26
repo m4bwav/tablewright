@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.0 (2026-11-26)
+- `tt.py calendar FILE [--drift 3]`: a world-day ledger per group; prints each group's timeline and warns when split groups drift 3 or more days apart. Idea from the 1979 AD&D Dungeon Masters Guide (time keeping, pp. 37-50).
+- `tt.py hirelings FILE [--roll NAME --event E --seed N]`: hireling loyalty from pay against the going rate, treatment and the leader's charisma modifier; lists the events that call for a check (unpaid, abused, sent ahead, bribe, leader down) and rolls one. Idea from the 1979 AD&D Dungeon Masters Guide (pp. 169-170).
+- `tt.py district FILE`: city district cards with watch strength, bribe cost, gate and curfew rules and the block's owner; warns on missing fields and prints a one-line card each. Idea from the Lankhmar GM guide (AD&D 2e).
+- `tt.py chase [--lead --escape --rounds --table --seed]`: a seeded city pursuit, opposed d6 per round plus a complication from a built-in list or the user's table, ending when caught or escaped. Idea from the Lankhmar GM guide.
+- `encounter --foe 3:brute` (or `"3 role:brute"`): foe roles, a role count, and a warning when 4 or more foes all share one role. Idea from the D&D 4e Dungeon Master's Guide.
+- 5 new tests; all wording, steps and numbers are ours and unverified.
+
 ## 0.10.0 (2026-11-26)
 - `tt.py safety`: optional `comfort` per player and topic (none, offscreen, limited, full) and `planned` levels; each topic takes the lowest player's level and a planned level above it fails. Idea from the D&D 3.5 Advanced GM guide (Dungeon Master's Guide II era, "Sensitive Subjects"). Empty `takebacks` or `info_flow` warn; idea from the D&D 3.5 Dungeon Master's Guide.
 - `tt.py battle plan.json [--results]`: a mass battle played as three representative fights, each with a shape and a carry-over for a win, and a five-step result. Idea from the D&D 3.5 Advanced GM guide.

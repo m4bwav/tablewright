@@ -48,6 +48,11 @@ Comfort levels: a safety plan may add `comfort` ({player: {topic: none|offscreen
 - Session review: the `session-log` template has `## Highlights` (`scene; players; payoff`) and `## Weak points` (`scene; players; problem; fix`). `tt.py review logs/*.md` tallies both per player, lists the fixes and warns on a player with no highlight.
 - House rules: `tt.py houserules rules.json` (list of `rule`, `kind` add/change/remove, `why`, `offset`, `review_after`) fails a rule with no why and warns on a removal with no offset or a rule with no review date.
 - Skill challenges and long tasks: `tt.py challenge card.json` (`goal`, `successes`, `failures`, `skills` with `kind`, `on_fail`, `shown`; optional `pool` with `milestones` [{`at`}], `minutes` and `limit`) fails on no goal, under 3 skills or no failure route, and warns on one skill kind, a hidden score or a time limit shorter than a flawless run.
+- Split parties: `tt.py calendar days.json` ({"groups": {name: [{day, event}]}}) prints each timeline and warns when groups drift `--drift 3` days apart.
+- Hirelings: `tt.py hirelings roster.json` (`going_rate`, `leader_cha_mod`, `hirelings` with `name`, `pay`, `treatment`) gives each a loyalty score and the check triggers; `--roll NAME --event unpaid|abused|sent-ahead|bribe|leader-down --seed N` rolls d100.
+- City districts: `tt.py district districts.json` (`name`, `watch`, `bribe`, `gate`, `curfew`, `owner`) warns on gaps and prints one card each.
+- Chases: `tt.py chase --lead 3 --escape 6 --seed N [--table file]` (lines `complication;shift`) runs opposed d6 rounds until caught or escaped.
+- Foe roles: `encounter --foe 3:brute`; prints a role count, warns when 4+ foes share one role.
 - Overland travel: `tt.py travel --miles 48 --terrain forest --hours 8 [--known]` gives miles a day (pace times terrain), days, +25% on an unknown route and a fatigue point per hour past 8. Multipliers are ours.
 
 ## Adventure structure
