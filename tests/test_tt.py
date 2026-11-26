@@ -101,3 +101,15 @@ def test_prep_card_flags_gaps():
     assert r.returncode == 1
     assert "no ## Opening" in r.stdout and "has 1, want 3" in r.stdout
     assert "without a goal" in r.stdout and "warn: fight without" in r.stdout
+
+
+def test_fiveroom_ok():
+    r = run("fiveroom", FX / "fiveroom_ok.json")
+    assert r.returncode == 0 and "warn" not in r.stdout
+
+
+def test_fiveroom_flags_gaps():
+    r = run("fiveroom", FX / "fiveroom_bad.json")
+    assert r.returncode == 1
+    for s in ("out of order", "at least 2 solutions", "costs nothing", "needs a lever", "same mode"):
+        assert s in r.stdout, s

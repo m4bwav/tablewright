@@ -1,0 +1,6 @@
+{"areas": [
+ {"role": "entrance", "mode": "fight"},
+ {"role": "climax", "mode": "fight"},
+ {"role": "puzzle", "mode": "fight", "solutions": ["one way"]},
+ {"role": "setback"}
+]}
