@@ -136,6 +136,10 @@ def cmd_encounter(a):
     budgets = pf_budgets(a.party) if a.system != "5e" else dnd_budgets(a.party, a.level)
     total, notes = 0, []
     a.foe, roles = split_roles(a.foe)
+    if a.scale:
+        add = scale_foes(a.scale, a.party)
+        a.foe = a.foe + [a.foe[0]] * add
+        notes.append(f"scale {a.scale}: party of {a.party} adds {add} foe(s) of {a.foe[0]}")
     for f in a.foe:
         xp, note = foe_xp(a.system, f, a.level)
         if xp is None:
@@ -185,6 +189,19 @@ def cmd_encounter(a):
         res["protect"] = protect_rounds(a.protect, a.attackers)
         for o in res["protect"]:
             notes.append(f"protect {o['object']} #{o['n']}: breaks in round {o['round']} ({o['hp']} HP)")
+    if a.buff_source:
+        buffed = round(total * BUFF_MULT)
+        res["buffed_xp"], res["buffed_threat"] = buffed, band_for(buffed, budgets)
+        notes.append(f"while the {a.buff_source} stands (foes have advantage): {buffed} XP, threat {res['buffed_threat']};"
+                     f" once destroyed: {total} XP, threat {band}")
+    if a.trigger:
+        if not a.wave:
+            res["warnings"].append("--trigger with no --wave")
+        for i, w in enumerate(waves, 1):
+            notes.append(f"wave {i} ({w['count']}x{w['foe']}) enters when a foe on the field is {a.trigger}, not on a round")
+        if a.mission and a.mission != "kill":
+            res["warnings"].append(f"waves on {a.trigger} reward fighting, but the mission is {a.mission};"
+                                   " let the real solution stop the waves")
     if a.waves:
         day = total + wave_xp
         cap = budgets["moderate"] * DAY_FIGHTS
@@ -2048,6 +2065,8 @@ def cmd_premise(a):
 def cmd_wander(a):
     """Random-encounter clock: checks per period, then distance, surprise, reaction or evasion. Numbers configurable."""
     import random
+    if a.from_rooms:
+        return wander_from_rooms(a.from_rooms)
     if a.chance < 1 or a.every <= 0:
         die("--chance and --every must be positive")
     warns = []
@@ -2518,6 +2537,8 @@ def cmd_chase(a):
     """City pursuit: each round both sides roll d6, the higher moves the lead one step, then a complication shifts it."""
     import random
     rng = random.Random(a.seed)
+    if a.collapse:
+        return chase_collapse(a)
     if a.legs:
         return chase_legs(a, rng)
     if a.stations:
@@ -2612,6 +2633,8 @@ def cmd_trap(a):
             miss = [f for f in TRAP_FULL if not t.get(f)]
             if miss:
                 warns.append(f"{t.get('name') or '?'}: no {', '.join(miss)}")
+    if a.reset:
+        errs += trap_reset_errors(traps)
     deadly = [t for t in traps if t.get("severity") == "deadly"]
     if deadly and len(deadly) * 2 > len(traps):
         warns.append(f"{len(deadly)} of {len(traps)} traps are deadly; most should cost resources, not lives")
@@ -3127,6 +3150,7 @@ def cmd_favor(a):
 # ---------- 0.14.0 ----------
 
 XP_OUTCOMES = ("killed", "surrendered", "routed", "persuaded")
+XP_HOWS = ("kill", "sneak", "trick", "parley")
 STORY_CAP = 10  # our default: a story award above 1/10 of any PC's xp_to_next is too big
 
 
@@ -3137,8 +3161,20 @@ def cmd_xp(a):
     if not party:
         die("xp needs party")
     errs, seen, total = [], set(), 0
+    hows, done = {}, set()
     for f in foes:
         n = f.get("name", "?")
+        if a.award_once:
+            key = f.get("encounter", n)
+            if key in done:
+                print(f"{n}: encounter {key} already awarded, 0 XP")
+                continue
+            done.add(key)
+            how = str(f.get("how", "kill")).lower()
+            if how not in XP_HOWS:
+                errs.append(f"{n}: how {how}, use " + ", ".join(XP_HOWS))
+                continue
+            hows[how] = hows.get(how, 0) + 1
         out = str(f.get("outcome", "")).lower()
         if out not in XP_OUTCOMES:
             errs.append(f"{n}: outcome {out or 'missing'}, use " + ", ".join(XP_OUTCOMES))
@@ -3157,6 +3193,12 @@ def cmd_xp(a):
             seen.add(g)
         total += int(f.get("xp", 0))
     story = int(d.get("story", 0))
+    if hows:
+        print("overcome by: " + ", ".join(f"{k} {v}" for k, v in sorted(hows.items())))
+    if a.per_rescue:
+        res = int(d.get("rescues", 0))
+        print(f"rescues: {res} x {a.per_rescue} = {res * a.per_rescue} XP")
+        total += res * a.per_rescue
     if story > total:
         errs.append(f"story award {story} is more than the foe XP {total}")
     for p in party:
@@ -3316,6 +3358,9 @@ def cmd_rooms(a):
         e2, w2 = piece_errors(rooms)
         errs += e2
         warns += w2
+    e2, w2 = rooms_extras(a, rooms)
+    errs += e2
+    warns += w2
     report(errs, warns, f"{len(rooms)} rooms")
 
 
@@ -3491,8 +3536,15 @@ def cmd_objective(a):
     start = entry_rooms(rooms)[0]
     open_rooms = reach_rooms(by, start, grow_keys(by, start, ())) if any("exits" in r for r in rooms) else set(by)
     errs, warns, done = [], [], []
-    if not a.gate and not a.kill_list:
-        die("give --gate FLAG:N and/or --kill-list a,b,c")
+    if not a.gate and not a.kill_list and not a.hold_rounds:
+        die("give --gate FLAG:N, --kill-list a,b,c and/or --hold-rounds N")
+    if a.hold_rounds:
+        if a.hold_rounds < 1:
+            die("--hold-rounds must be 1 or more")
+        done.append(f"hold for {a.hold_rounds} rounds" + ("; the hold counts even if the party falls in the last round"
+                                                         if a.wipe_counts else "; a wipe before the end fails it"))
+        if not any(r.get("anchor") or r.get("rite") for r in rooms):
+            warns.append("no room has an anchor or rite; a hold with no way to end the threat early drags")
     for g in a.gate or []:
         flag, _, n = g.rpartition(":")
         if not flag or not n.isdigit():
@@ -4809,6 +4861,14 @@ DOOM_MAX = 7  # more spaces than this and the track stops feeling close; our num
 def cmd_doomtrack(a):
     """Doom track JSON: spaces with an event and a shown_by, scenes with fail_cost and cap, outcomes per solved paths."""
     import itertools
+    if a.stages or a.renewal:
+        if a.stages:
+            doom_stages(a)
+        if a.renewal:
+            doom_renewal(a)
+        return
+    if not a.file:
+        die("doomtrack needs a file, or --stages / --renewal")
     d = load_json(a.file)
     errs, warns = [], []
     spaces = d.get("spaces") or []
@@ -5147,6 +5207,10 @@ SITE_SIGNS = 2
 
 def cmd_site(a):
     """Site prep JSON: location, entries, upkeep, ecology, visitors; doors, drops, treasure, rumours; a clock with signs."""
+    if a.recorrupt is not None:
+        return site_recorrupt(a)
+    if not a.file:
+        die("site needs a file, or --recorrupt DAYS")
     d = load_json(a.file)
     errs, warns = [], []
     if not d.get("location"):
@@ -5328,6 +5392,372 @@ def alert_waves(a):
         print(f"arrived XP: {xp} (add it to the last fight)")
 
 
+# ---- 0.25.0: routes, schedules, noise, teleports, hooks, boons, rituals and clocks (all numbers ours) ----
+
+ROUTE_CAP = 200  # stop listing paths past this many; our number
+
+
+def route_errors(rooms):
+    """--routes: every simple path from an entry to a goal room (goal: true; else exit: true), with the XP met
+    on it (room xp) and the biggest single fight once alarm_to foes join their target room."""
+    by = {r.get("name", "?"): r for r in rooms}
+    errs, warns = [], []
+    goals = {n for n, r in by.items() if r.get("goal")} or {n for n, r in by.items() if r.get("exit")}
+    if not goals:
+        return ["--routes: mark a room goal: true (or exit: true)"], []
+    joined = {n: int(r.get("xp", 0)) for n, r in by.items()}
+    for n, r in by.items():
+        t = r.get("alarm_to")
+        if not t:
+            continue
+        if t not in by:
+            errs.append(f"{n}: alarm_to {t}, no such room")
+            continue
+        joined[t] += int(r.get("xp", 0))
+        warns.append(f"{n}: on alarm its foes join {t}; that fight becomes {joined[t]} XP")
+    paths = []
+
+    def walk(path):
+        if len(paths) >= ROUTE_CAP:
+            return
+        if path[-1] in goals:
+            paths.append(path)
+            return
+        for nx in by[path[-1]].get("exits") or []:
+            if nx in by and nx not in path:
+                walk(path + [nx])
+
+    for e in entry_rooms(rooms):
+        if e in by:
+            walk([e])
+    if not paths:
+        errs.append("--routes: no path from an entry reaches " + ", ".join(sorted(goals)))
+    for p in paths:
+        xp = sum(int(by[x].get("xp", 0)) for x in p)
+        top = max(joined[x] for x in p)
+        print(f"route {' > '.join(p)}: {xp} XP, biggest fight {top} XP")
+    return errs, warns
+
+
+SCHEDULE_SURPRISE = {"asleep": "party surprises them", "idle": "normal initiative",
+                     "patrol": "they are alert, no surprise", "rite": "busy, party surprises them"}
+SCHEDULE_LETHAL = 1 / 3  # warn when a lethal activity comes up this often or more; our number
+
+
+def schedule_errors(rooms):
+    """--schedule: room schedule {activity: weight}, lethal: [activities]; print odds and surprise per result."""
+    errs, warns = [], []
+    for r in rooms:
+        s = r.get("schedule")
+        if not s:
+            continue
+        n = r.get("name", "?")
+        if not isinstance(s, dict) or not all(isinstance(v, int) and v > 0 for v in s.values()):
+            errs.append(f"{n}: schedule wants {{activity: weight}} with whole weights above 0")
+            continue
+        tot = sum(s.values())
+        for act, w in s.items():
+            print(f"{n}: {act} {w}/{tot} ({100 * w / tot:.0f}%), {SCHEDULE_SURPRISE.get(act, 'normal initiative')}")
+        lethal = [x for x in r.get("lethal") or [] if x in s]
+        for x in r.get("lethal") or []:
+            if x not in s:
+                errs.append(f"{n}: lethal {x} is not in its schedule")
+        odds = sum(s[x] for x in lethal) / tot
+        if lethal and odds >= SCHEDULE_LETHAL:
+            warns.append(f"{n}: arrival lands in a lethal window ({', '.join(lethal)}) {100 * odds:.0f}% of the time;"
+                         " give a warning sign or lower the weight")
+    return errs, warns
+
+
+def muffle_report(rooms):
+    """--muffle: a room with noise: true is heard one exit away unless either room has muffled: true."""
+    by = {r.get("name", "?"): r for r in rooms}
+    adj = {n: set() for n in by}
+    for n, r in by.items():
+        for x in r.get("exits") or []:
+            if x in by:
+                adj[n].add(x)
+                adj[x].add(n)
+    for n, r in by.items():
+        if not r.get("noise"):
+            continue
+        if r.get("muffled"):
+            print(f"{n}: noise stays in the room (muffled)")
+            continue
+        heard = sorted(x for x in adj[n] if not by[x].get("muffled"))
+        damp = sorted(x for x in adj[n] if by[x].get("muffled"))
+        print(f"{n}: noise heard in {', '.join(heard) or 'no room'}" + (f"; damped by {', '.join(damp)}" if damp else ""))
+    if not any(r.get("noise") for r in rooms):
+        return ["--muffle: no room has noise: true"], []
+    return [], []
+
+
+def teleport_errors(rooms):
+    """--teleport: room teleport: [targets] is a random table; every target must still reach a room with
+    exit: true by exits or more teleports, and the node should name a bypass the party can learn."""
+    by = {r.get("name", "?"): r for r in rooms}
+    errs, warns = [], []
+    exits = {n for n, r in by.items() if r.get("exit")}
+    if not exits:
+        return ["--teleport: mark a room exit: true"], []
+
+    def reach(start):
+        seen, todo = set(), [start]
+        while todo:
+            x = todo.pop()
+            if x in seen or x not in by:
+                continue
+            seen.add(x)
+            todo += list(by[x].get("exits") or []) + list(by[x].get("teleport") or [])
+        return seen
+
+    nodes = 0
+    for n, r in by.items():
+        tbl = r.get("teleport")
+        if not tbl:
+            continue
+        nodes += 1
+        print(f"{n}: {len(tbl)} results, each {100 / len(tbl):.0f}%")
+        for t in tbl:
+            if t not in by:
+                errs.append(f"{n}: teleport target {t}, no such room")
+            elif not reach(t) & exits:
+                errs.append(f"{n}: a roll of {t} strands the party; no way from it to an exit")
+        if not r.get("bypass"):
+            warns.append(f"{n}: teleport node with no bypass; let the party learn a way to steer or skip it")
+    if not nodes:
+        errs.append("--teleport: no room has a teleport table")
+    return errs, warns
+
+
+def hook_errors(rooms):
+    """--hooks: room hooks [{name, dc, later}]; a hook the party must notice (dc) needs later: what happens if
+    they miss or ignore it, so the event still fires or resolves on its own."""
+    errs, warns, n_hooks = [], [], 0
+    for r in rooms:
+        for h in r.get("hooks") or []:
+            n_hooks += 1
+            nm = f"{r.get('name', '?')}: hook {h.get('name', '?')}"
+            if h.get("later"):
+                continue
+            if h.get("dc") is not None:
+                warns.append(f"{nm} is gated by a check (dc {h['dc']}) with no later; let it fire or resolve on its own")
+            else:
+                warns.append(f"{nm} has no later; say how it resolves if ignored")
+    if not n_hooks:
+        errs.append("--hooks: no room has hooks")
+    return errs, warns
+
+
+def rooms_extras(a, rooms):
+    errs, warns = [], []
+    for flag, fn in (("routes", route_errors), ("schedule", schedule_errors), ("muffle", muffle_report),
+                     ("teleport", teleport_errors), ("hooks", hook_errors)):
+        if getattr(a, flag, False):
+            e, w = fn(rooms)
+            errs += e
+            warns += w
+    return errs, warns
+
+
+BUFF_MULT = 1.5  # foes with advantage from a standing object count this much more XP; our number
+
+
+def scale_foes(spec, party):
+    """'3:0,6:1,8:2': foes added at each party-size breakpoint; the highest breakpoint at or under the party wins."""
+    try:
+        pts = sorted((int(p), int(q)) for p, q in (x.split(":") for x in spec.split(",") if x.strip()))
+    except ValueError:
+        die(f"bad --scale {spec!r} (use SIZE:ADD,..., e.g. 3:0,6:1,8:2)")
+    best = 0
+    for size, add in pts:
+        if party >= size:
+            best = add
+    return best
+
+
+TREASURE_PAR = 100  # par wealth a PC = this x level squared, in gp; our own curve
+
+
+def cmd_treasure_gap(a):
+    """Gold to pay out per PC so the party reaches par wealth for its level (our curve)."""
+    if not 1 <= a.level <= 20:
+        die("level must be 1 to 20")
+    par = TREASURE_PAR * a.level * a.level
+    each = a.party_gold / a.party
+    gap = max(0, par - each)
+    print(f"par wealth at level {a.level}: {par} gp a PC (our curve, {TREASURE_PAR} x level squared)")
+    print(f"party has {a.party_gold} gp, {each:.0f} a PC; pay out {gap:.0f} a PC ({gap * a.party:.0f} total)")
+    if each > par * 1.5:
+        print(f"warn: {each:.0f} a PC is over 1.5 x par; hold treasure back for a while")
+
+
+RITUAL_TIERS = ("minor", "moderate", "serious", "grave", "dire")
+
+
+def cmd_ritual(a):
+    """Misfortune check for a ritual attempt: rolled when untrained, interrupted or level 5+; the target and the
+    severity tier climb with level and with each of those. Our own ladder."""
+    if not 1 <= a.level <= 10:
+        die("ritual level must be 1 to 10")
+    if not (a.untrained or a.interrupted or a.level >= 5):
+        print(f"level {a.level} ritual, trained, uninterrupted: no misfortune roll")
+        return
+    tier = min((a.level - 1) // 3 + int(a.untrained) + int(a.interrupted), len(RITUAL_TIERS) - 1)
+    target = min(19, 2 + a.level + 2 * int(a.untrained) + 3 * int(a.interrupted))
+    why = [w for w, on in (("untrained", a.untrained), ("interrupted", a.interrupted), ("level 5+", a.level >= 5)) if on]
+    print(f"level {a.level} ritual ({', '.join(why)}): misfortune on d20 {target} or less"
+          f" ({100 * target / 20:.0f}%), severity {RITUAL_TIERS[tier]}")
+
+
+def doom_stages(a):
+    """--stages birth:7,growth:90,formed: days per stage; --acts N --accelerant D cuts D days per act from each
+    timed stage (1 day floor). The last stage has no length; once there the threat spreads."""
+    day = 0
+    parts = [x.strip() for x in a.stages.split(",") if x.strip()]
+    if len(parts) < 2:
+        die("--stages wants 2+ stages, e.g. birth:7,growth:90,formed")
+    for i, p in enumerate(parts):
+        name, _, d = p.partition(":")
+        if i == len(parts) - 1:
+            print(f"{name}: from day {day}; spreads outward from here")
+            break
+        if not d.isdigit():
+            die(f"stage {p!r} wants NAME:DAYS (only the last stage has no days)")
+        d = max(1, int(d) - a.acts * a.accelerant)
+        print(f"{name}: day {day} to {day + d}")
+        day += d
+    if a.acts:
+        print(f"{a.acts} evil act(s) inside it, each cutting {a.accelerant} day(s) from every timed stage")
+
+
+def doom_renewal(a):
+    """--renewal PERIOD --streak K: the binding is recast every PERIOD days; each recast gives the prisoner a save,
+    a missed recast frees it, K unbroken recasts make it permanent."""
+    p, k = a.renewal, a.streak
+    if p < 1 or k < 1:
+        die("--renewal and --streak must be 1 or more")
+    for i in range(1, k + 1):
+        print(f"recast {i} by day {i * p}: the prisoner gets a save; missed, it goes free")
+    print(f"permanent after {k} unbroken recasts (day {k * p})")
+
+
+def chase_collapse(a):
+    """--collapse FEET to safety; the edge starts --head-start feet behind, moves --edge-speed a round and
+    --accel more each round; the party moves --speed a round."""
+    if min(a.collapse, a.speed) < 1:
+        die("--collapse and --speed must be 1 or more")
+    rounds_safe = -(-a.collapse // a.speed)
+    gap, edge, caught = a.head_start, a.edge_speed, None
+    for r in range(1, rounds_safe + 1):
+        gap += a.speed - edge
+        if gap <= 0 and r < rounds_safe:
+            caught = r
+            break
+        edge += a.accel
+    print(f"safety in {rounds_safe} round(s) at {a.speed} ft a round")
+    if caught:
+        print(f"warn: the edge catches the party in round {caught}; give a dash, a shortcut or a closer safe spot")
+    else:
+        print(f"the edge does not catch them ({max(gap, 0)} ft behind when they reach safety)")
+
+
+def cmd_boons(a):
+    """Boons JSON {boons: [{name, once_per_pc, xp}], pcs: [{name, level, xp, boons: [names]}]}: a once-per-PC
+    boon taken twice fails (--once-per-pc makes every boon once); boon XP lifting a PC 2+ levels (5e) warns."""
+    d = load_json(a.file)
+    defs = {b.get("name"): b for b in d.get("boons") or []}
+    errs, warns = [], []
+    for pc in d.get("pcs") or []:
+        n, got = pc.get("name", "?"), pc.get("boons") or []
+        for b in sorted(set(got)):
+            if b not in defs:
+                errs.append(f"{n}: boon {b} is not in boons")
+            elif got.count(b) > 1 and (defs[b].get("once_per_pc") or a.once_per_pc):
+                errs.append(f"{n}: {b} taken {got.count(b)} times; it is once per character (redraw)")
+        lump = sum(int(defs.get(b, {}).get("xp", 0)) for b in got)
+        lv = max(1, min(20, int(pc.get("level", 1))))
+        xp = int(pc.get("xp", LEVEL_XP_5E[lv - 1]))
+        old = sum(1 for t in LEVEL_XP_5E if t <= xp)
+        new = sum(1 for t in LEVEL_XP_5E if t <= xp + lump)
+        if new - old >= 2:
+            warns.append(f"{n}: boon XP {lump} jumps level {old} to {new}; spread it over sessions")
+    report(errs, warns, f"{len(d.get('pcs') or [])} PC(s), {len(defs)} boon(s)")
+
+
+ADVENTURE_PILLARS = ("combat", "social", "explore", "either")
+
+
+def cmd_adventure(a):
+    """Adventure JSON {scenes: [{name, pillar, optional}]}: --pillars counts required and optional scenes per
+    pillar; warns when combat or social is missing, one pillar holds over half, or nothing is optional."""
+    scenes = load_list(a.file, "scenes")
+    errs, warns, req, opt = [], [], {}, {}
+    for s in scenes:
+        p = s.get("pillar")
+        if p not in ADVENTURE_PILLARS:
+            errs.append(f"{s.get('name', '?')}: pillar {p!r}, use " + ", ".join(ADVENTURE_PILLARS))
+            continue
+        box = opt if s.get("optional") else req
+        box[p] = box.get(p, 0) + 1
+    if a.pillars:
+        for p in ADVENTURE_PILLARS:
+            print(f"{p}: {req.get(p, 0)} required, {opt.get(p, 0)} optional")
+    tot = len(scenes)
+    for p in ("combat", "social"):
+        if not req.get(p, 0) + opt.get(p, 0) + req.get("either", 0) + opt.get("either", 0):
+            warns.append(f"no {p} scene; a player who likes {p} gets nothing")
+    for p in ("combat", "social", "explore"):
+        v = req.get(p, 0) + opt.get(p, 0)
+        if tot >= 4 and v * 2 > tot:
+            warns.append(f"{v} of {tot} scenes are {p}; mix in the other pillars")
+    if not opt:
+        warns.append("no optional scene; give the players a choice of what to skip")
+    report(errs, warns, f"{tot} scenes")
+
+
+def wander_from_rooms(path):
+    """Foes with patrol: true leave their room for the wandering table and drop out of the room's total."""
+    rooms = load_list(path, "rooms")
+    rows = []
+    for r in rooms:
+        for f in r.get("foes") or []:
+            if f.get("patrol"):
+                rows.append(f"{len(rows) + 1}: {f.get('name', '?')} (from {r.get('name', '?')}, {f.get('xp', 0)} XP)")
+    if not rows:
+        die("--from-rooms: no foe has patrol: true")
+    print("wandering table from patrols (not counted in their rooms):")
+    for x in rows:
+        print("  " + x)
+    for r in rooms:
+        foes = r.get("foes") or []
+        stay = [f for f in foes if not f.get("patrol")]
+        if len(stay) < len(foes):
+            print(f"{r.get('name', '?')}: {len(stay)} foe(s) stay, {sum(int(f.get('xp', 0)) for f in stay)} XP")
+
+
+def site_recorrupt(a):
+    """A cleansed node reverts after DAYS, N days sooner per living villain (1 day floor); an interrupted
+    ritual restarts the clock."""
+    if a.recorrupt < 1:
+        die("--recorrupt must be 1 or more")
+    for live in range(a.live, -1, -1):
+        print(f"{live} villain(s) alive: the node reverts on day {max(1, a.recorrupt - a.minus_per_live * live)}")
+    print("interrupting the ritual restarts the clock")
+
+
+def trap_reset_errors(traps):
+    """--reset: a trap with guards: PUZZLE must say how it resets (reset) and whether the party may try again (retry)."""
+    out = []
+    for t in traps:
+        if t.get("guards"):
+            for f in ("reset", "retry"):
+                if not t.get(f):
+                    out.append(f"{t.get('name') or '?'}: guards {t['guards']} with no {f}; say how a failed try plays out")
+    return out
+
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -5359,6 +5789,9 @@ def main(argv=None):
             s.add_argument("--protect", help="OBJ:COUNT:HP objects the party must protect")
             s.add_argument("--attackers", help="N:DMG for --protect: N attackers, fixed DMG each a round")
             s.add_argument("--waves", action="store_true", help="sum the fight and its --wave entries as one no-rest day")
+            s.add_argument("--buff-source", help="an object granting every foe advantage; prints the band with and without it")
+            s.add_argument("--scale", help="SIZE:ADD,... foes of the first --foe added per party size, e.g. 3:0,6:1,8:2")
+            s.add_argument("--trigger", choices=["bloodied"], help="each --wave enters on this, not on its round")
         else:
             s.add_argument("--threat", default="moderate")
         s.add_argument("--json", action="store_true")
@@ -5468,6 +5901,7 @@ def main(argv=None):
     s.add_argument("--feet", type=int, default=10, help="distance is 2d6 times this")
     s.add_argument("--surprise", type=int, default=3, help="each side is surprised on 1 in N")
     s.add_argument("--placed", action="append", help="area with a placed population")
+    s.add_argument("--from-rooms", help="rooms JSON: foes with patrol: true become the table, out of their rooms")
     s.add_argument("--run", action="store_true"); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_wander)
     s = sub.add_parser("battle", help="a mass battle as three representative fights")
     s.add_argument("plan"); s.add_argument("--results", help="outcome of each fight in order: won,lost,drawn")
@@ -5545,6 +5979,11 @@ def main(argv=None):
     s.add_argument("--stations", type=int, help="pursuit mode: hourly opposed track rolls for N stations")
     s.add_argument("--pursuer", type=int, default=0, help="--stations: the pursuers' track bonus")
     s.add_argument("--quarry", type=int, default=0, help="--stations: the quarry's track bonus")
+    s.add_argument("--collapse", type=int, help="collapse mode: feet to safety ahead of a shrinking zone")
+    s.add_argument("--speed", type=int, default=30, help="--collapse: party feet a round")
+    s.add_argument("--edge-speed", type=int, default=20, help="--collapse: edge feet a round")
+    s.add_argument("--accel", type=int, default=10, help="--collapse: edge speeds up this much each round")
+    s.add_argument("--head-start", type=int, default=30, help="--collapse: feet between party and edge at the start")
     s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_chase)
     s = sub.add_parser("attendance", help="who came and what to do with absent PCs")
     s.add_argument("roster"); s.add_argument("--present", type=int, required=True)
@@ -5552,6 +5991,7 @@ def main(argv=None):
     s.set_defaults(fn=cmd_attendance)
     s = sub.add_parser("trap", help="check traps: trigger, detection, disable, effect, severity")
     s.add_argument("file"); s.add_argument("--full", action="store_true", help="also want avoid, reset and alarm")
+    s.add_argument("--reset", action="store_true", help="a trap with guards: PUZZLE needs reset and retry")
     s.set_defaults(fn=cmd_trap)
     s = sub.add_parser("downtime", help="check downtime activities: time, cost or sink, outcomes")
     s.add_argument("file"); s.set_defaults(fn=cmd_downtime)
@@ -5605,7 +6045,10 @@ def main(argv=None):
     s.add_argument("--risk", choices=list(FAVOR_RISK), required=True); s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_favor)
     s = sub.add_parser("xp", help="story and foe XP award, split among survivors")
-    s.add_argument("file"); s.set_defaults(fn=cmd_xp)
+    s.add_argument("file"); s.add_argument("--award-once", action="store_true",
+                                           help="each encounter's XP once, tagged how: kill, sneak, trick, parley")
+    s.add_argument("--per-rescue", type=int, help="XP per rescue (the file's rescues count)")
+    s.set_defaults(fn=cmd_xp)
     s = sub.add_parser("xp-gap", help="does an adventure's XP award reach the next level (5e)")
     s.add_argument("--party", type=int, default=4); s.add_argument("--level", type=int, required=True)
     s.add_argument("--award", type=int, required=True, help="total XP the adventure gives")
@@ -5624,6 +6067,11 @@ def main(argv=None):
     s = sub.add_parser("rooms", help="check rooms: timer, threat, treat, stake, wonder, dials")
     s.add_argument("--keys", action="store_true", help="check locks and keys: orphans, a key behind its own lock")
     s.add_argument("--pieces", action="store_true", help="puzzle pieces (piece_of) must lie before the puzzle room")
+    s.add_argument("--routes", action="store_true", help="entry-to-goal paths with XP; alarm_to foes joining a fight")
+    s.add_argument("--schedule", action="store_true", help="activity odds per room, surprise, lethal windows")
+    s.add_argument("--muffle", action="store_true", help="which rooms hear a noise: true room; muffled rooms damp it")
+    s.add_argument("--teleport", action="store_true", help="teleport tables: every result reaches an exit; a bypass")
+    s.add_argument("--hooks", action="store_true", help="hooks gated by a check need later: how they resolve")
     s.add_argument("file"); s.set_defaults(fn=cmd_rooms)
     s = sub.add_parser("session-end", help="rounds left and the final turns")
     s.add_argument("--seed", type=int); s.add_argument("--die", type=int, default=6)
@@ -5713,11 +6161,21 @@ def main(argv=None):
     s.add_argument("file"); s.add_argument("--strict", action="store_true", help="warnings fail too")
     s.set_defaults(fn=cmd_realm)
     s = sub.add_parser("doomtrack", help="check a doom track: spaces with events, scene costs, outcomes per solved paths")
-    s.add_argument("file"); s.set_defaults(fn=cmd_doomtrack)
+    s.add_argument("file", nargs="?")
+    s.add_argument("--stages", help="staged clock NAME:DAYS,...,LAST e.g. birth:7,growth:90,formed")
+    s.add_argument("--acts", type=int, default=0, help="--stages: evil acts done inside it")
+    s.add_argument("--accelerant", type=int, default=7, help="--stages: days each act cuts from each timed stage")
+    s.add_argument("--renewal", type=int, metavar="PERIOD", help="renewal preset: days between recasts")
+    s.add_argument("--streak", type=int, default=3, help="--renewal: unbroken recasts to make it permanent")
+    s.set_defaults(fn=cmd_doomtrack)
     s = sub.add_parser("hazard", help="check a multi-problem hazard round: counters, caps, deadlines, order")
     s.add_argument("file"); s.set_defaults(fn=cmd_hazard)
     s = sub.add_parser("site", help="check a site prep card: entries, upkeep, doors, drops, rumours, clock")
-    s.add_argument("file"); s.set_defaults(fn=cmd_site)
+    s.add_argument("file", nargs="?")
+    s.add_argument("--recorrupt", type=int, help="days until a cleansed node reverts")
+    s.add_argument("--minus-per-live", type=int, default=1, help="--recorrupt: days sooner per living villain")
+    s.add_argument("--live", type=int, default=3, help="--recorrupt: villains alive at the start")
+    s.set_defaults(fn=cmd_site)
     s = sub.add_parser("interrogate", help="check an interrogation ladder: ascending DCs, truth tags, the real story")
     s.add_argument("file"); s.set_defaults(fn=cmd_interrogate)
     s = sub.add_parser("carry", help="carry-over foes per group between fights")
@@ -5734,6 +6192,8 @@ def main(argv=None):
     s = sub.add_parser("objective", help="boss gates over a rooms JSON: flag counts and an any-order kill list")
     s.add_argument("file"); s.add_argument("--gate", action="append", help="FLAG:N, the boss appears after N rooms set FLAG")
     s.add_argument("--kill-list", help="a,b,c foes to kill in any order; reveal on the last")
+    s.add_argument("--hold-rounds", type=int, help="the party must hold for N rounds")
+    s.add_argument("--wipe-counts", action="store_true", help="--hold-rounds: a fall in the last round still counts")
     s.set_defaults(fn=cmd_objective)
     s = sub.add_parser("burst", help="party round-one expected damage against one target")
     s.add_argument("file"); s.set_defaults(fn=cmd_burst)
@@ -5747,6 +6207,19 @@ def main(argv=None):
     s.add_argument("file"); s.set_defaults(fn=cmd_lore)
     s = sub.add_parser("arc", help="check an adventure arc: levels per chapter, finale gold share")
     s.add_argument("file"); s.set_defaults(fn=cmd_arc)
+    s = sub.add_parser("treasure-gap", help="gold per PC to reach par wealth for the level (our curve)")
+    s.add_argument("--level", type=int, required=True); s.add_argument("--party", type=int, default=4)
+    s.add_argument("--party-gold", type=float, required=True, help="the party's total wealth in gp")
+    s.set_defaults(fn=cmd_treasure_gap)
+    s = sub.add_parser("ritual", help="does a ritual attempt roll for misfortune, and how bad (our ladder)")
+    s.add_argument("--level", type=int, required=True); s.add_argument("--untrained", action="store_true")
+    s.add_argument("--interrupted", action="store_true"); s.set_defaults(fn=cmd_ritual)
+    s = sub.add_parser("boons", help="check boons: once-per-PC repeats, boon XP that jumps levels")
+    s.add_argument("file"); s.add_argument("--once-per-pc", action="store_true", help="treat every boon as once per PC")
+    s.set_defaults(fn=cmd_boons)
+    s = sub.add_parser("adventure", help="check an adventure's scenes by pillar: combat, social, explore")
+    s.add_argument("file"); s.add_argument("--pillars", action="store_true", help="print the count per pillar")
+    s.set_defaults(fn=cmd_adventure)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
