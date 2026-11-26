@@ -155,3 +155,31 @@ def test_item_reward_condition(tmp_path):
     assert r.returncode == 1 and "no condition or expectation" in r.stdout
     r = run("item", jw(tmp_path, "j.json", [{"name": "river blessing", "reward": "blessing", "expectation": "guard the ford"}]))
     assert r.returncode == 0
+
+
+def test_villain_escape(tmp_path):
+    base = "## Mara\n- wants: the throne\n- public: a kind abbess\n- reach: holy ground\n- harm: rumors\n- harm: taxes\n"
+    f = tmp_path / "v.md"
+    f.write_text(base, encoding="utf-8")
+    assert "no escape:" in run("villain", f).stdout
+    f.write_text(base + "- escape: a tunnel under the altar\n", encoding="utf-8")
+    assert "no escape:" not in run("villain", f).stdout
+    f.write_text(base + "- captured_ok: true\n", encoding="utf-8")
+    assert "no escape:" not in run("villain", f).stdout
+
+
+def test_fiveroom_dynamic(tmp_path):
+    areas = [{"role": "entrance", "dynamic": "yes", "response": "bells"}, {"role": "puzzle", "solutions": ["a", "b"]},
+             {"role": "setback", "cost": "hp"}, {"role": "climax", "lever": "chain"}, {"role": "reward"}]
+    r = run("fiveroom", jw(tmp_path, "f.json", {"areas": areas}))
+    assert "area 1: dynamic with no plan" in r.stdout and "no response" not in r.stdout
+
+
+def test_party_entry(tmp_path):
+    pcs = [{"name": "A", "ties": ["B"], "plot_tie": "x"}, {"name": "B", "ties": ["A"], "plot_tie": "y", "joined_mid": True}]
+    r = run("party", jw(tmp_path, "p.json", {"pcs": pcs}))
+    assert "B: joined mid-campaign with no entry" in r.stdout
+    pcs[1]["entry"] = "rescued"
+    assert "joined mid" not in run("party", jw(tmp_path, "q.json", {"pcs": pcs})).stdout
+    pcs[1]["entry"] = "portal"
+    assert run("party", jw(tmp_path, "r.json", {"pcs": pcs})).returncode == 1

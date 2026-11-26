@@ -17,7 +17,10 @@
 - `tt.py downtime FILE`: each activity needs a time cost and a money cost or sink; repeatable ones need an outcomes table; warns on no hook or one that replaces adventuring. Idea from the 5e DMG, ch. 6, pp. 127-132.
 - `tt.py npcs`: a card tagged `major: true` also needs `ideal:`, `bond:` and `flaw:` (or `secret:`). Idea from the 5e DMG, ch. 4, pp. 89-91.
 - `tt.py item`: an entry with `reward:` (a blessing, title or favour, not an item) needs a `condition` or `expectation`. Idea from the 5e DMG, ch. 7, p. 227.
-- 15 new tests; all wording, steps and numbers are ours and unverified.
+- `tt.py villain`: optional `escape:` (how the villain avoids capture, planned in advance); warns without one unless `captured_ok: true`. Idea from the D&D 3.5 Dungeon Master's Guide, pp. 103-104.
+- `tt.py fiveroom`: an area with `dynamic: yes` warns without `response` (alarm) and `plan` (left alone). Idea from the 3.5 DMG, pp. 46-47.
+- `tt.py party`: optional `entry` (happenstance, rescued, remnant, errand); a PC with `joined_mid: true` and no entry warns. Idea from the 3.5 DMG, pp. 129 and 134.
+- 18 new tests; all wording, steps and numbers are ours and unverified.
 
 ## 0.10.0 (2026-11-26)
 - `tt.py safety`: optional `comfort` per player and topic (none, offscreen, limited, full) and `planned` levels; each topic takes the lowest player's level and a planned level above it fails. Idea from the D&D 3.5 Advanced GM guide (Dungeon Master's Guide II era, "Sensitive Subjects"). Empty `takebacks` or `info_flow` warn; idea from the D&D 3.5 Dungeon Master's Guide.

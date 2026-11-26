@@ -761,6 +761,10 @@ def cmd_fiveroom(a):
         errs.append("climax is not at or next to the end")
     for i, x in enumerate(areas):
         n, r = i + 1, x.get("role")
+        if str(x.get("dynamic", "")).lower() in ("yes", "true"):
+            for k, why in (("response", "what happens when the alarm goes up"), ("plan", "what the occupants do if left alone")):
+                if not x.get(k):
+                    warns.append(f"area {n}: dynamic with no {k} ({why})")
         if r == "puzzle":
             if len(x.get("solutions", [])) < 2:
                 errs.append(f"area {n}: puzzle needs at least 2 solutions")
@@ -848,6 +852,9 @@ def cmd_villain(a):
             for x in opts:
                 if "serves:" not in x.lower():
                     warns.append(f"{name}: offer option does not say how it serves the villain: {x}")
+        if not key("escape") and [v.lower() for v in key("captured_ok")] != ["true"]:
+            warns.append(f"{name}: no escape: (how they avoid capture, planned before the showdown); "
+                         "or 'captured_ok: true' if capture is a fine ending")
     if not sec:
         die("no '## Name' villain sections")
     report(errs, warns, f"{len(sec)} villains")
@@ -1009,6 +1016,9 @@ def cmd_venues(a):
     report(errs, warns, f"population {a.population}")
 
 
+PARTY_ENTRY = ("happenstance", "rescued", "remnant", "errand")
+
+
 def cmd_party(a):
     """Party JSON {pcs: [{name, ties, plot_tie}], reveals: [{text, fallback}]}: PC ties, plot ties, plan B."""
     d = json.loads(Path(a.file).read_text(encoding="utf-8"))
@@ -1026,6 +1036,11 @@ def cmd_party(a):
             warns.append(f"{n}: tied to fewer than {need} other PCs")
         if not p.get("plot_tie"):
             errs.append(f"{n}: no plot_tie to the main plot")
+        e = p.get("entry")
+        if e and e not in PARTY_ENTRY:
+            errs.append(f"{n}: entry {e!r}, use {', '.join(PARTY_ENTRY)}")
+        elif p.get("joined_mid") and not e:
+            warns.append(f"{n}: joined mid-campaign with no entry ({', '.join(PARTY_ENTRY)}): how they meet the party")
     for r in d.get("reveals", []):
         if not r.get("fallback"):
             errs.append(f"reveal with no fallback if the players guess or skip it: {r.get('text', '?')[:40]}")
