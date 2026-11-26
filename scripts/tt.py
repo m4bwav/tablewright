@@ -148,6 +148,14 @@ def cmd_encounter(a):
     total += haz_xp
     notes += haz_notes
     waves, wave_xp, wave_warns = plan_waves(a)
+    counted = count_foes(a)
+    deadly = "high" if a.system == "5e" else "extreme"
+    for spec, lo, mean, hi in counted:
+        notes.append(f"count {spec}: {lo} / {mean:g} / {hi} XP (min / mean / max) on top of {total}")
+        if total + hi > budgets[deadly]:
+            notes.append(f"count {spec}: the max roll ({total + hi} XP) is over the {deadly.title()} budget; cap the count")
+    if counted:
+        total += sum(round(m) for _, _, m, _ in counted)
     band = band_for(total, budgets)
     nxt =[(k, v) for k, v in sorted(budgets.items(), key=lambda kv: kv[1]) if v > total]
     res = {"system": a.system, "party": a.party, "level": a.level, "xp": total, "threat": band,
@@ -1390,6 +1398,10 @@ def cmd_table(a):
     """Check a random encounter table CSV (roll,kind,difficulty,avoidable): gaps, fight share, unavoidable easy fights."""
     if a.table == "combine":
         return cmd_combine(a)
+    if a.table == "check":
+        return table_check(a)
+    if a.table == "lint":
+        return table_lint(a)
     if a.tables:
         die("table takes one file (or: table combine A.csv B.csv ...)")
     rows, covered, errs = read_table(a.table)
@@ -1674,6 +1686,8 @@ RESULT = {"won": 1, "drawn": 0, "lost": -1}
 
 def cmd_battle(a):
     """Mass battle JSON: exactly three fights the PCs play, each with a shape and what a win carries forward."""
+    if a.resolve:
+        return battle_resolve(a)
     d = json.loads(Path(a.plan).read_text(encoding="utf-8"))
     fights = d.get("fights", [])
     errs, warns = [], []
@@ -1835,6 +1849,12 @@ TERRAIN = {"road": 1.0, "plains": 0.75, "forest": 0.5, "hills": 0.5, "swamp": 0.
 
 def cmd_travel(a):
     """Days for a trip: pace times terrain, hours past 8 a day cost fatigue, an unknown route adds a quarter."""
+    if a.watches is not None:
+        travel_watches(a)
+        if a.miles is None:
+            return
+    if a.miles is None:
+        die("travel needs --miles (or --watches N for the day and night rhythm)")
     if a.terrain not in TERRAIN:
         die(f"terrain {a.terrain!r}, use {', '.join(TERRAIN)}")
     if a.miles <= 0 or a.pace <= 0 or not 1 <= a.hours <= 16:
@@ -2574,6 +2594,12 @@ def cmd_morale(a):
         except ValueError:
             die(f"--mod NAME=V, got {m}")
         print(f"{k}: {int(v):+d}")
+    if a.break_units is not None or a.dice == "2d6":
+        if a.dice == "2d6" and a.rating is None:
+            die("--dice 2d6 needs --rating (the morale score)")
+        return morale_extra(a, mod)
+    if a.rating is None:
+        die("morale needs --rating (or --break UNITS)")
     target = a.rating + mod
     roll = a.roll
     if roll is None:
@@ -2765,6 +2791,519 @@ def cmd_playtest(a):
 
 
 
+# 0.15.0: wilderness rhythm, mass battles, army logistics, herbalism. Every number is ours or the user's file.
+def parse_dice(expr):
+    """'2d10', 'd100', '3d6+2', '4' -> (count, faces, plus)."""
+    s = str(expr).strip().lower().replace(" ", "")
+    try:
+        if "d" not in s:
+            return 0, 0, int(s)
+        n, _, rest = s.partition("d")
+        plus = 0
+        for sign in "+-":
+            if sign in rest:
+                rest, _, k = rest.partition(sign)
+                plus = int(k) * (1 if sign == "+" else -1)
+        n, f = int(n or 1), int(rest)
+        if n < 1 or f < 2:
+            raise ValueError
+        return n, f, plus
+    except ValueError:
+        die(f"bad dice {expr!r}; use NdM, NdM+K or a number")
+
+
+def dice_dist(expr):
+    """Exact distribution {total: probability} of a dice expression."""
+    n, f, plus = parse_dice(expr)
+    dist = {0: 1.0}
+    for _ in range(n):
+        nxt = {}
+        for t, p in dist.items():
+            for k in range(1, f + 1):
+                nxt[t + k] = nxt.get(t + k, 0) + p / f
+        dist = nxt
+    return {t + plus: p for t, p in dist.items()}
+
+
+def roll_expr(expr, rng):
+    n, f, plus = parse_dice(expr)
+    return sum(rng.randint(1, f) for _ in range(n)) + plus
+
+
+def parse_odds(s):
+    """'1/6', '0.2' or '20%' -> a probability."""
+    s = str(s).strip()
+    try:
+        if "/" in s:
+            x, y = s.split("/")
+            p = int(x) / int(y)
+        elif s.endswith("%"):
+            p = float(s[:-1]) / 100
+        else:
+            p = float(s)
+    except (ValueError, ZeroDivisionError):
+        die(f"bad odds {s!r}; use 1/6, 0.2 or 20%")
+    if not 0 <= p <= 1:
+        die(f"odds {s} outside 0 to 1")
+    return p
+
+
+def load_json(path):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        die(f"{path}: {e}")
+
+
+DAY_SLOTS = ("morning", "midday", "afternoon", "evening")
+
+
+def travel_watches(a):
+    """A day roll with a time slot, one check per night watch (a cold camp adds odds), weather every few hours."""
+    import random
+    rng = random.Random(a.seed)
+    day_p, watch_p = parse_odds(a.day_odds), parse_odds(a.watch_odds)
+    if a.no_fire:
+        watch_p = min(1.0, watch_p + parse_odds(a.no_fire_odds))
+    any_night = 1 - (1 - watch_p) ** a.watches
+    print(f"day: {day_p:.0%} event chance; night: {a.watches} watch(es) at {watch_p:.0%} each"
+          + (" (no fire)" if a.no_fire else "") + f"; at least one night event {any_night:.1%}")
+    if a.no_fire:
+        base = 1 - (1 - parse_odds(a.watch_odds)) ** a.watches
+        print(f"a fire would make it {base:.1%}; the cold camp hides you less well, the fire shows you from afar")
+    print(f"weather checks: every {a.weather_every:g} hours, {math.ceil(24 / a.weather_every)} a day")
+    if a.seed is not None:
+        if rng.random() < day_p:
+            print(f"day roll: event in the {rng.choice(DAY_SLOTS)}")
+        else:
+            print("day roll: quiet")
+        for w in range(1, a.watches + 1):
+            print(f"watch {w}: " + ("event" if rng.random() < watch_p else "quiet"))
+
+
+def cmd_weather(a):
+    """Weather states from a JSON file: change chance per check, effect flags, encounters implausible in a state."""
+    import random
+    d = load_json(a.file)
+    states = d.get("states") or {}
+    if not states:
+        die("weather file needs states: {name: {change, next, effects}}")
+    cur = a.start or d.get("start") or next(iter(states))
+    if cur not in states:
+        die(f"start state {cur!r} not in states")
+    errs = [f"state {k}: next names unknown {n}" for k, v in states.items() for n in v.get("next", []) if n not in states]
+    if errs:
+        report(errs, [], "")
+    rng = random.Random(a.seed)
+    hours = 0
+    while hours < a.hours:
+        st = states[cur]
+        eff = st.get("effects") or []
+        print(f"hour {hours:g}: {cur}" + (f" ({', '.join(eff)})" if eff else ""))
+        hours += a.every
+        if hours < a.hours and st.get("next") and rng.random() < float(st.get("change", 0)):
+            cur = rng.choice(st["next"])
+    for e in d.get("encounters", []):
+        if cur in (e.get("implausible_in") or []):
+            print(f"reroll: {e.get('name')} makes no sense in {cur}")
+
+
+def table_check(a):
+    """Coverage of a roll table against a dice expression: gaps, overlaps, and each row's chance."""
+    if not a.dice or len(a.tables) != 1:
+        die("table check FILE.csv --dice 2d10 (or d100, 3d6...)")
+    with open(a.tables[0], encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+    dist = dice_dist(a.dice)
+    seen, errs = {}, []
+    for r in rows:
+        try:
+            lo, hi = roll_range(r)
+        except (KeyError, ValueError, AttributeError):
+            die(f"bad roll {r.get('roll')!r} (use 3 or 1-4)")
+        for v in range(lo, hi + 1):
+            if v in seen:
+                errs.append(f"{v} is in rows {seen[v]} and {r['roll']}")
+            seen.setdefault(v, r["roll"])
+        outside = [v for v in range(lo, hi + 1) if v not in dist]
+        if outside:
+            errs.append(f"row {r['roll']}: {a.dice} cannot roll {outside[:5]}")
+        p = sum(dist.get(v, 0) for v in range(lo, hi + 1))
+        name = r.get("result") or r.get("kind") or r.get("name") or ""
+        print(f"{r['roll']:>7} {p:6.1%} {name}")
+    gaps = sorted(v for v in dist if v not in seen)
+    if gaps:
+        errs.append(f"{a.dice} can roll {gaps[:10]} with no row")
+    report(errs, [], f"{len(rows)} rows cover {a.dice}")
+
+
+def table_lint(a):
+    """Encounter entries (JSON list) each need a hook, a truth, a skill-check follow-up and a morale rule."""
+    if len(a.tables) != 1:
+        die("table lint FILE.json")
+    d = load_json(a.tables[0])
+    ents = d.get("encounters", []) if isinstance(d, dict) else d
+    errs = []
+    for i, e in enumerate(ents, 1):
+        miss = [k for k in ("hook", "truth", "check", "morale") if not e.get(k)]
+        if miss:
+            errs.append(f"{e.get('name', 'entry %d' % i)}: no {', '.join(miss)}")
+    report(errs, [], f"{len(ents)} encounter entries")
+
+
+def count_foes(a):
+    """--count-foe DICExLVL: (spec, min, mean, max) XP of a dice-range foe count."""
+    rows = []
+    for spec in a.count_foe or []:
+        expr, _, lvl = spec.partition("x")
+        if not lvl:
+            die(f"--count-foe DICExLEVEL, got {spec}")
+        xp, note = foe_xp(a.system, lvl, a.level)
+        if xp is None:
+            die(f"--count-foe {spec}: {note}")
+        dist = dice_dist(expr)
+        mean = sum(k * p for k, p in dist.items())
+        rows.append((spec, min(dist) * xp, mean * xp, max(dist) * xp))
+    return rows
+
+
+def cmd_unit(a):
+    """A troop type as a unit rating: HP in blocks, one damage per hit; flags foes that hit only on a 20. Or hero scale."""
+    if a.hero is not None:
+        if a.scale < 1:
+            die("--scale at least 1")
+        dmg = a.hero // a.scale
+        print(f"hero at unit scale: {a.hero} damage / {a.scale} = {dmg} to a unit per hit"
+              + (" (too small to wound a unit; count it as 1 on a hit)" if dmg == 0 else ""))
+        print(f"attack sequences a round: {a.sequences} (give the hero more swings, not more damage)")
+        return
+    if a.hp is None or a.block < 1:
+        die("unit needs --hp (and --block at least 1), or --hero")
+    pts = max(1, math.ceil(a.hp / a.block))
+    print(f"unit: {pts} point(s) of HP ({a.hp:g} HP / {a.block}), {a.attacks} attack(s), AC {a.ac}, morale {a.morale}; each hit does 1")
+    warns = []
+    if a.enemy_hit is not None:
+        need = a.ac - a.enemy_hit
+        if need >= 20:
+            warns.append(f"enemy at {a.enemy_hit:+d} needs {need} on the d20: hits only on a natural 20")
+        else:
+            print(f"enemy at {a.enemy_hit:+d} hits on {max(2, need)}+ ({(21 - max(2, need)) / 20:.0%})")
+    report([], warns, f"rating {pts * max(1, a.attacks)} (points x attacks)")
+
+
+def cmd_command(a):
+    """Divisions' activation cost against each commander's leadership, and division count against the general's cap."""
+    d = load_json(a.file)
+    errs, warns = [], []
+    divs = d.get("divisions", [])
+    cap = d.get("general", {}).get("cap")
+    if cap is not None and len(divs) > cap:
+        errs.append(f"{len(divs)} divisions, the general can lead {cap}")
+    for dv in divs:
+        cost = 0
+        for u in dv.get("units", []):
+            c = 1 + bool(u.get("out_of_radius")) + bool(u.get("disordered")) - bool(u.get("lieutenant"))
+            cost += max(1, c)
+        lead = dv.get("leadership", 0)
+        who = dv.get("commander", "?")
+        print(f"{who}: {len(dv.get('units', []))} unit(s) cost {cost} of {lead}")
+        if cost > lead:
+            errs.append(f"{who} needs {cost} to activate all, has {lead}")
+        elif cost == lead:
+            warns.append(f"{who} has no spare points")
+    report(errs, warns, f"{len(divs)} division(s)")
+
+
+def battle_resolve(a):
+    """Expected hits each round per side, run until one side loses a third of its units, then pursuit throws."""
+    import random
+    d = load_json(a.plan)
+    sides = d.get("sides") or []
+    if len(sides) != 2:
+        die("--resolve wants sides: [two armies of units]")
+    hp = [[u.get("hp", 1) for u in s["units"]] for s in sides]
+    start = [len(s["units"]) for s in sides]
+    brk = [math.ceil(n / 3) for n in start]
+    carry = [0.0, 0.0]
+    broken = [False, False]
+    for rnd in range(1, a.rounds + 1):
+        hits = []
+        for i in (0, 1):
+            alive_foe = [u for u, h in zip(sides[1 - i]["units"], hp[1 - i]) if h > 0]
+            ac = sum(u.get("ac", 10) for u in alive_foe) / max(1, len(alive_foe))
+            e = 0.0
+            for u, h in zip(sides[i]["units"], hp[i]):
+                if h > 0:
+                    need = max(2, min(20, math.ceil(ac - u.get("to_hit", 0))))
+                    e += u.get("attacks", 1) * (21 - need) / 20
+            hits.append(e)
+        for i in (0, 1):
+            carry[1 - i] += hits[i]
+            while carry[1 - i] >= 1 and any(h > 0 for h in hp[1 - i]):
+                j = next(k for k, h in enumerate(hp[1 - i]) if h > 0)
+                hp[1 - i][j] -= 1
+                carry[1 - i] -= 1
+        lost = [sum(h <= 0 for h in hp[i]) for i in (0, 1)]
+        print(f"round {rnd}: {sides[0].get('name', 'A')} {hits[0]:.1f} hits, {sides[1].get('name', 'B')} {hits[1]:.1f} hits;"
+              f" lost {lost[0]}/{start[0]} and {lost[1]}/{start[1]}")
+        broken = [lost[i] >= brk[i] for i in (0, 1)]
+        if any(broken):
+            break
+    if not any(broken):
+        print(f"no side broke in {a.rounds} rounds")
+        return
+    if all(broken):
+        print("both sides reach their break point: a mutual withdrawal")
+        return
+    loser = broken.index(True)
+    win = 1 - loser
+    print(f"{sides[loser].get('name', 'side')} breaks (lost {lost[loser]} of {start[loser]}, break point {brk[loser]})")
+    rng = random.Random(a.seed)
+    for u, h in zip(sides[win]["units"], hp[win]):
+        if h > 0 and u.get("pursue", True):
+            print(f"pursuit: {u.get('name', 'unit')} throws 2d6 {rng.randint(1, 6) + rng.randint(1, 6)}")
+
+
+def parse_bands(spec):
+    """'rout<=4,fall back<=7,hold' -> [(name, max or None)]."""
+    out = []
+    for part in spec.split(","):
+        name, _, mx = part.partition("<=")
+        try:
+            out.append((name.strip(), int(mx) if mx.strip() else None))
+        except ValueError:
+            die(f"--bands: bad part {part!r}")
+    if out[-1][1] is not None:
+        die("--bands: the last band takes no <= (it is everything above)")
+    return out
+
+
+def morale_extra(a, mod):
+    """--break N: the army break point. --dice 2d6: odds of each band for 2d6 + rating + mods."""
+    if a.break_units is not None:
+        print(f"break point: the army breaks after losing {math.ceil(a.break_units / 3)} of {a.break_units} units (a third)")
+    if a.dice == "2d6":
+        dist = dice_dist("2d6")
+        prev = -999
+        for name, mx in parse_bands(a.bands):
+            top = mx if mx is not None else 999
+            p = sum(q for t, q in dist.items() if prev < t + a.rating + mod <= top)
+            print(f"{name}: {p:.1%}")
+            prev = top
+
+
+MARCH_REST = 6  # our default: days marched before a rest day is owed
+
+
+def cmd_march(a):
+    """Tactical speed to daily and weekly miles, with terrain and road, rest debt and forced-march fatigue."""
+    daily = a.speed / a.per_mile * a.terrain_mult * (a.road_mult if a.road else 1) * (1.5 if a.forced else 1)
+    print(f"{daily:.1f} miles a day, {daily * MARCH_REST:.0f} a week (one rest day)")
+    warns = []
+    debt = max(0, a.days_marched - MARCH_REST)
+    if debt:
+        warns.append(f"{debt} rest day(s) owed after {a.days_marched} days without one: -{debt} to fighting until rested")
+    if a.forced:
+        warns.append("forced march: -1 fatigue per forced day; each rest day clears one")
+    report([], warns, f"speed {a.speed:g}")
+
+
+def supply_cost(d):
+    mult = d.get("multipliers", {})
+    base = d.get("base_value", 1)
+    total, errs = 0.0, []
+    for u in d.get("units", []):
+        c = d.get("costs", {}).get(u.get("type"))
+        if c is None:
+            errs.append(f"no cost for unit type {u.get('type')}")
+            continue
+        m = (mult.get("mounted", 1) if u.get("mounted") else 1) * (mult.get("meat", 1) if u.get("meat") else 1)
+        total += c * m * base * u.get("count", 1)
+    return total, errs
+
+
+def cmd_supply(a):
+    """Weekly supply cost, weighted supply line length against a cap, or foraging (levy or loot)."""
+    d = load_json(a.file)
+    if a.forage:
+        f = d.get("forage") or die("--forage needs a forage block: families, levy_yield, loot_yield, loot_loss")
+        fam = f.get("families", 0)
+        if a.forage == "levy":
+            print(f"levy: {fam * f.get('levy_yield', 0):g} from {fam} families, none lost")
+        else:
+            lost = math.ceil(fam * f.get("loot_loss", 0))
+            print(f"loot: {fam * f.get('loot_yield', 0):g} from {fam} families; {lost} families lost (dead or fled)")
+            print("warn: looted land yields less next season and turns the locals against you")
+        return
+    total, errs = supply_cost(d)
+    warns = []
+    print(f"weekly supply: {total:g}")
+    line = d.get("line")
+    if line is not None:
+        length = sum(d.get("weights", {}).get(h, 1) for h in line)
+        cap = d.get("line_cap")
+        print(f"supply line: {len(line)} hexes, weighted {length:g}" + (f" of {cap}" if cap is not None else ""))
+        if cap is not None and length > cap:
+            warns.append(f"line {length:g} over the cap {cap}: out of supply")
+    report(errs, warns, "supply")
+
+
+def cmd_siege(a):
+    """Structure points to a garrison capacity, the blockade, breaches from bombardment, and days to fall."""
+    d = load_json(a.file)
+    f, s = d.get("fortress", {}), d.get("siege", {})
+    warns = []
+    cap = f.get("structure", 0) // max(1, f.get("per_unit", 1))
+    gar = f.get("garrison", 0)
+    print(f"capacity {cap} unit(s), garrison {gar}")
+    if gar > cap:
+        warns.append(f"garrison {gar} over capacity {cap}")
+    block = s.get("units", 0) + s.get("ships", 0) * s.get("ship_weight", 1) + (s.get("circumvallation_bonus", 0) if s.get("circumvallation") else 0)
+    need = f.get("blockade_need", 0)
+    print(f"blockade {block:g} of {need} needed")
+    if block < need:
+        warns.append("blockade too thin: the fortress can be resupplied")
+    bomb = s.get("bombard_per_day", 0)
+    if bomb and f.get("breach_at"):
+        print(f"first breach after {math.ceil(f['breach_at'] / bomb)} day(s) of bombardment")
+    net = s.get("advantage", 0) - f.get("advantage", 0)
+    if net <= 0:
+        print("no net advantage: the siege does not end by itself")
+    else:
+        days = math.ceil(d.get("base_days", 30) / net * f.get("site_mult", 1))
+        print(f"falls in about {days} day(s) (net advantage {net:g}, site x{f.get('site_mult', 1)})")
+    report([], warns, "siege")
+
+
+def cmd_upkeep(a):
+    """Weekly campaign tick: income minus supply and wages, treasury per week; fails a week that goes negative."""
+    d = load_json(a.file)
+    cost, errs = supply_cost(d)
+    cost += d.get("wages", 0)
+    tre = d.get("treasury", 0)
+    for wk in range(1, a.weeks + 1):
+        tre += d.get("income", 0) - cost
+        print(f"week {wk}: +{d.get('income', 0):g} -{cost:g} = {tre:g}")
+        if tre < 0 and not errs:
+            errs.append(f"treasury negative in week {wk}: cut units, forage or raise income")
+    report(errs, [], f"{a.weeks} week(s)")
+
+
+RARITY = ("common", "uncommon", "rare", "very rare", "legendary")
+
+
+def forage_check(d):
+    errs, warns = [], []
+    for name, t in (d.get("terrains") or {}).items():
+        miss = [k for k in range(2, 13) if str(k) not in t]
+        if miss:
+            errs.append(f"{name}: no rows {miss}")
+            continue
+        rar = {k: t[str(k)].get("rarity", "common") for k in range(2, 13)}
+        bad = [k for k, v in rar.items() if v not in RARITY]
+        if bad:
+            errs.append(f"{name}: unknown rarity on {bad}; use {', '.join(RARITY)}")
+            continue
+        rk = {k: RARITY.index(v) for k, v in rar.items()}
+        if any(rk[k] for k in (6, 7, 8)):
+            warns.append(f"{name}: rows 6-8 should be common (or route to the common table)")
+        if any(rk[k] > rk[k + 1] for k in range(7, 12)) or any(rk[k] > rk[k - 1] for k in range(3, 8)):
+            errs.append(f"{name}: rarity should rise from 7 toward both 2 and 12")
+    return errs, warns
+
+
+def cmd_forage(a):
+    """Roll a forage check, 1d4 finds, each a 2d6 row on the user's terrain table; or --check the table."""
+    import random
+    if not a.table:
+        die("forage needs --table FILE.json (terrains: {name: {'2'..'12': {item, rarity, conditions}}}, common: [...])")
+    d = load_json(a.table)
+    if a.check:
+        errs, warns = forage_check(d)
+        return report(errs, warns, f"{len(d.get('terrains', {}))} terrain(s)")
+    t = (d.get("terrains") or {}).get(a.terrain)
+    if t is None:
+        die(f"terrain {a.terrain!r} not in the table ({', '.join(d.get('terrains', {}))})")
+    rng = random.Random(a.seed)
+    r = rng.randint(1, 20)
+    found = r + a.mod >= a.dc
+    print(f"check d20 {r} {a.mod:+d} vs {a.dc}: " + ("found something" if found else "nothing"))
+    if not found:
+        return
+    have = {c for c, on in (("night", a.night), ("rain", a.rain)) if on}
+    for i in range(rng.randint(1, 4)):
+        k = rng.randint(1, 6) + rng.randint(1, 6)
+        row = t.get(str(k), {})
+        item = row.get("item", "?")
+        if 6 <= k <= 8 and d.get("common"):
+            item = rng.choice(d["common"])
+        conds = set(row.get("conditions", []))
+        qty = 2 if "x2" in conds else 1
+        need = conds - {"x2"} - have
+        if need:
+            print(f"find {i + 1}: 2d6 {k} {item} needs {', '.join(sorted(need))}; nothing")
+            continue
+        if k in (2, 12) and d.get("rare") and rng.randint(1, 6) == 6:
+            item = rng.choice(d["rare"]) + " (rare swap)"
+        print(f"find {i + 1}: 2d6 {k} {qty} x {item} ({row.get('rarity', 'common')})")
+
+
+def cmd_craft(a):
+    """One base, up to three modifiers (none with a catalyst); DC 10 plus their values; output save DC 8 + mod."""
+    import random
+    ing = load_json(a.recipes).get("ingredients", {})
+    mods = [m.strip() for m in (a.mods or "").split(",") if m.strip()]
+    if a.base not in ing:
+        die(f"base {a.base!r} not in ingredients")
+    errs = [f"unknown ingredient {m}" for m in mods if m not in ing]
+    if ing[a.base].get("catalyst") and mods:
+        errs.append("a catalyst base takes no modifiers")
+    if len(mods) > 3:
+        errs.append(f"{len(mods)} modifiers, 3 at most")
+    if errs:
+        report(errs, [], "")
+    dc = 10 + ing[a.base].get("value", 0) + sum(ing[m].get("value", 0) for m in mods)
+    r = a.roll if a.roll is not None else random.Random(a.seed).randint(1, 20)
+    m = r + a.mod - dc
+    print(f"DC {dc}; d20 {r} {a.mod:+d}: " + (f"pass by {m}" if m >= 0 else f"fail by {-m}") + f"; save DC {8 + a.mod}")
+
+
+def cmd_identify(a):
+    """Identify check: a tier per 5 of margin (per 10 when rare); a failure locks retries until something changes."""
+    import random
+    r = a.roll if a.roll is not None else random.Random(a.seed).randint(1, 20)
+    m = r + a.mod - a.dc
+    if m < 0:
+        print(f"d20 {r} {a.mod:+d} vs {a.dc}: fail; no retry until a new clue, tool or a day's study")
+        return
+    step = 10 if a.rare else 5
+    print(f"d20 {r} {a.mod:+d} vs {a.dc}: pass by {m}, tier {1 + m // step} (a tier per {step})")
+
+
+def cmd_sell(a):
+    """Find a buyer (check), days to the buyer (die), then d% plus modifier into the user's offer bands."""
+    import random
+    d = load_json(a.market)
+    rng = random.Random(a.seed)
+    key = a.rarity or ("ingredients" if a.ingredients else None)
+    if not key:
+        die("sell --rarity R or --ingredients K")
+    dc = (d.get("search_dc") or {}).get(key)
+    if dc is None:
+        die(f"no search_dc for {key}")
+    r = rng.randint(1, 20)
+    if r + a.mod < dc:
+        print(f"buyer search d20 {r} {a.mod:+d} vs {dc}: no buyer this time")
+        return
+    days = roll_expr(d.get("days_die", "1d4"), rng)
+    pct = rng.randint(1, 100) + a.mod + (d.get("risky_bonus", 0) if a.risky else 0)
+    bands = d.get("bands") or [{"max": 999, "offer": "?"}]
+    band = next((b for b in bands if pct <= b["max"]), bands[-1])
+    print(f"buyer in {days} day(s); d% {pct}: offer {band['offer']}" + (f" ({a.ingredients} ingredient lot)" if a.ingredients else ""))
+    if a.risky:
+        print(f"risky buyer: {d.get('risk', 'the deal may go bad')}")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -2785,6 +3324,7 @@ def main(argv=None):
             s.add_argument("--morale", help="when the foes retreat, e.g. half or 3")
             s.add_argument("--smart", action="store_true", help="the foes are intelligent")
             s.add_argument("--escape", help="the foes' way out")
+            s.add_argument("--count-foe", action="append", help="DICExLEVEL: a dice-range count of one foe, e.g. 2d4x1")
         else:
             s.add_argument("--threat", default="moderate")
         s.add_argument("--json", action="store_true")
@@ -2831,6 +3371,7 @@ def main(argv=None):
     s.add_argument("--max-fight", type=float, default=0.35)
     s.add_argument("--die", type=int, help="faces of the die the table is rolled on")
     s.add_argument("--seed", type=int); s.add_argument("--count", type=int, default=6)
+    s.add_argument("--dice", help="table check: the dice rolled on it, e.g. 2d10 or d100")
     s.set_defaults(fn=cmd_table)
     s = sub.add_parser("mystery", help="check a mystery's clues and suspects")
     s.add_argument("file"); s.set_defaults(fn=cmd_mystery)
@@ -2885,6 +3426,8 @@ def main(argv=None):
     s.add_argument("--run", action="store_true"); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_wander)
     s = sub.add_parser("battle", help="a mass battle as three representative fights")
     s.add_argument("plan"); s.add_argument("--results", help="outcome of each fight in order: won,lost,drawn")
+    s.add_argument("--resolve", action="store_true", help="plan is two sides of units: resolve without a map")
+    s.add_argument("--rounds", type=int, default=20); s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_battle)
     s = sub.add_parser("review", help="merge highlights and weak points from session logs per player")
     s.add_argument("logs", nargs="+"); s.set_defaults(fn=cmd_review)
@@ -2893,7 +3436,11 @@ def main(argv=None):
     s = sub.add_parser("challenge", help="check a skill challenge or long task card")
     s.add_argument("card"); s.set_defaults(fn=cmd_challenge)
     s = sub.add_parser("travel", help="days and fatigue for an overland trip")
-    s.add_argument("--miles", type=float, required=True)
+    s.add_argument("--miles", type=float)
+    s.add_argument("--watches", type=int, help="night watches: day roll, per-watch checks, chance of a night event")
+    s.add_argument("--day-odds", default="1/6"); s.add_argument("--watch-odds", default="1/6")
+    s.add_argument("--no-fire", action="store_true", help="a cold camp"); s.add_argument("--no-fire-odds", default="1/12", help="added per watch with no fire")
+    s.add_argument("--weather-every", type=float, default=4, help="hours between weather checks")
     s.add_argument("--pace", type=float, default=24, help="miles per day on open road")
     s.add_argument("--terrain", default="road", help=", ".join(TERRAIN))
     s.add_argument("--hours", type=float, default=8, help="hours marched per day")
@@ -2970,7 +3517,10 @@ def main(argv=None):
     s = sub.add_parser("xp", help="story and foe XP award, split among survivors")
     s.add_argument("file"); s.set_defaults(fn=cmd_xp)
     s = sub.add_parser("morale", help="2d10 morale check against a modified rating")
-    s.add_argument("--rating", type=int, required=True); s.add_argument("--mod", action="append", help="NAME=V")
+    s.add_argument("--rating", type=int); s.add_argument("--mod", action="append", help="NAME=V")
+    s.add_argument("--break", dest="break_units", type=int, help="starting units: print the army break point")
+    s.add_argument("--dice", choices=["2d10", "2d6"], default="2d10", help="2d6: odds of each band for 2d6 + rating + mods")
+    s.add_argument("--bands", default="rout<=4,fall back<=7,hold", help="2d6 bands, low to high")
     s.add_argument("--seed", type=int); s.add_argument("--roll", type=int); s.set_defaults(fn=cmd_morale)
     s = sub.add_parser("awards", help="check per-player awards, milestones and coins in session logs")
     s.add_argument("logs", nargs="+"); s.set_defaults(fn=cmd_awards)
@@ -2990,6 +3540,46 @@ def main(argv=None):
     s.set_defaults(fn=cmd_target)
     s = sub.add_parser("playtest", help="check a blind playtest log")
     s.add_argument("file"); s.set_defaults(fn=cmd_playtest)
+    s = sub.add_parser("weather", help="weather states over hours, effects, encounters to reroll")
+    s.add_argument("file"); s.add_argument("--hours", type=float, default=24); s.add_argument("--every", type=float, default=4)
+    s.add_argument("--start"); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_weather)
+    s = sub.add_parser("unit", help="a troop type as a unit rating, or a hero at unit scale")
+    s.add_argument("--hp", type=float); s.add_argument("--block", type=int, default=10, help="HP per unit point")
+    s.add_argument("--attacks", type=int, default=1); s.add_argument("--ac", type=int, default=10)
+    s.add_argument("--morale", type=int, default=0); s.add_argument("--enemy-hit", type=int, help="the enemy's attack bonus")
+    s.add_argument("--hero", type=int, help="hero damage per hit"); s.add_argument("--scale", type=int, default=10)
+    s.add_argument("--sequences", type=int, default=1, help="hero attack sequences a round")
+    s.set_defaults(fn=cmd_unit)
+    s = sub.add_parser("command", help="check divisions' activation cost against leadership")
+    s.add_argument("file"); s.set_defaults(fn=cmd_command)
+    s = sub.add_parser("march", help="army march: miles a day and week, rest debt, forced march")
+    s.add_argument("--speed", type=float, required=True, help="tactical speed in feet")
+    s.add_argument("--per-mile", type=float, default=5, help="feet of speed per daily mile")
+    s.add_argument("--terrain-mult", type=float, default=1); s.add_argument("--road", action="store_true")
+    s.add_argument("--road-mult", type=float, default=1.5); s.add_argument("--forced", action="store_true")
+    s.add_argument("--days-marched", type=int, default=0); s.set_defaults(fn=cmd_march)
+    s = sub.add_parser("supply", help="army weekly supply cost and line, or --forage levy|loot")
+    s.add_argument("file"); s.add_argument("--forage", choices=["levy", "loot"]); s.set_defaults(fn=cmd_supply)
+    s = sub.add_parser("siege", help="siege capacity, blockade, breaches, days to fall")
+    s.add_argument("file"); s.set_defaults(fn=cmd_siege)
+    s = sub.add_parser("upkeep", help="weekly campaign tick: treasury against supply and wages")
+    s.add_argument("file"); s.add_argument("--weeks", type=int, default=1); s.set_defaults(fn=cmd_upkeep)
+    s = sub.add_parser("forage", help="forage herbs on a terrain table, or --check the table")
+    s.add_argument("terrain", nargs="?"); s.add_argument("--table"); s.add_argument("--check", action="store_true")
+    s.add_argument("--mod", type=int, default=0); s.add_argument("--dc", type=int, default=15)
+    s.add_argument("--night", action="store_true"); s.add_argument("--rain", action="store_true")
+    s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_forage)
+    s = sub.add_parser("craft", help="brew: one base, up to three modifiers, DC and save DC")
+    s.add_argument("--recipes", required=True); s.add_argument("--base", required=True); s.add_argument("--mods")
+    s.add_argument("--mod", type=int, default=0); s.add_argument("--roll", type=int); s.add_argument("--seed", type=int)
+    s.set_defaults(fn=cmd_craft)
+    s = sub.add_parser("identify", help="identify a brew or herb: margin tiers, retry lock")
+    s.add_argument("--dc", type=int, default=10); s.add_argument("--mod", type=int, default=0); s.add_argument("--rare", action="store_true")
+    s.add_argument("--roll", type=int); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_identify)
+    s = sub.add_parser("sell", help="find a buyer, days to them, and the offer")
+    s.add_argument("--market", required=True); s.add_argument("--rarity"); s.add_argument("--ingredients", type=int)
+    s.add_argument("--mod", type=int, default=0); s.add_argument("--risky", action="store_true"); s.add_argument("--seed", type=int)
+    s.set_defaults(fn=cmd_sell)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
