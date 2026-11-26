@@ -9,7 +9,11 @@
 - `tt.py prep`: fights and hazards may carry `treat:` (an edge the party can find); a fight with `threat:` or `diff:` but no `timer:`/`clock:` and no treat warns. Idea from ICRPG Master Edition (Runehammer), pp. 92-93.
 - `tt.py prep`: a fight rated harder than the one before, or a climax, warns when it turns fewer than two of damage, disruption (`hazard:`, `terrain:`) and duration (`timer:`, `clock:`); `levers:` names them outright. Idea from ICRPG Master Edition, pp. 94-95.
 - `session-log` gains an `ending:` line (countdown, hook, choice, ran-long); `tt.py review` counts endings by kind and warns when most ran long. Idea from ICRPG Master Edition, p. 82.
-- 7 new tests; all wording, steps and numbers are ours and unverified.
+- `tt.py houserules`: entries may name a `situation` (or `trigger`) and `distinguishes`; two rules for the same situation that differ with no `distinguishes` warn. Idea from Arbiter of Worlds (Alexander Macris), ch. 13, pp. 81-82.
+- `tt.py prep`: fights may carry `stakes: position|assets|character|party`; all rated fights at one level warn, a climax below character warns. Idea from Arbiter of Worlds, ch. 15, pp. 90-91.
+- `session-log` gains `ended_mid_fight:` and `recap:` lines; `review` warns on a mid-fight stop and on a log with no recap. Idea from Arbiter of Worlds, ch. 10, pp. 61-62.
+- `tt.py attendance ROSTER --present N [--dynamic collective|competitive|individualist]`: warns at half or fewer present and says how to handle absent PCs for the group's dynamic. Idea from Arbiter of Worlds, ch. 12, p. 77.
+- 11 new tests; all wording, steps and numbers are ours and unverified.
 
 ## 0.10.0 (2026-11-26)
 - `tt.py safety`: optional `comfort` per player and topic (none, offscreen, limited, full) and `planned` levels; each topic takes the lowest player's level and a planned level above it fails. Idea from the D&D 3.5 Advanced GM guide (Dungeon Master's Guide II era, "Sensitive Subjects"). Empty `takebacks` or `info_flow` warn; idea from the D&D 3.5 Dungeon Master's Guide.

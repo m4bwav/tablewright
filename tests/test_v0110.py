@@ -86,3 +86,40 @@ def test_session_endings(tmp_path):
         (tmp_path / f"s{i}.md").write_text(f"## Next opening\n- ending: {e}\n", encoding="utf-8")
     r = run("review", *sorted(tmp_path.glob("s*.md")))
     assert r.returncode == 0 and "endings: hook 2, ran-long 1" in r.stdout
+
+
+def test_houserules_distinguishes(tmp_path):
+    base = {"kind": "add", "why": "speed", "review_after": 3, "situation": "falling"}
+    f = jw(tmp_path, "h.json", [{**base, "rule": "1d6 per 10 ft"}, {**base, "rule": "no damage into water"}])
+    assert "rule the same situation (falling)" in run("houserules", f).stdout
+    g = jw(tmp_path, "g.json", [{**base, "rule": "1d6 per 10 ft"},
+                                {**base, "rule": "no damage into water", "distinguishes": "landing in deep water"}])
+    assert "same situation" not in run("houserules", g).stdout
+
+
+def test_prep_stakes(tmp_path):
+    f = tmp_path / "p.md"
+    f.write_text(PREP + "- rats; out: flee; treat: oil; stakes: assets\n"
+                 "- climax ogre; out: yield; treat: ledge; levers: damage, duration; stakes: assets\n", encoding="utf-8")
+    r = run("prep", f)
+    assert "every rated fight risks assets" in r.stdout and "climax risks only assets" in r.stdout
+    f.write_text(PREP + "- rats; stakes: lunch\n", encoding="utf-8")
+    assert run("prep", f).returncode == 1
+
+
+def test_review_recap_and_mid_fight(tmp_path):
+    a = tmp_path / "a.md"
+    a.write_text("- ending: countdown\n- ended_mid_fight: yes\n", encoding="utf-8")
+    b = tmp_path / "b.md"
+    b.write_text("- ending: hook\n- recap: the vault is open\n", encoding="utf-8")
+    r = run("review", a, b)
+    assert "a.md: ended mid-fight" in r.stdout and "a.md: no recap" in r.stdout and "b.md: no recap" not in r.stdout
+
+
+def test_attendance(tmp_path):
+    f = jw(tmp_path, "r.json", ["Ash", "Bo", "Cy", "Di"])
+    r = run("attendance", f, "--present", "2", "--dynamic", "competitive")
+    assert "half or fewer" in r.stdout and "step out of the story" in r.stdout
+    r = run("attendance", f, "--present", "3")
+    assert "half" not in r.stdout and "collective" in r.stdout
+    assert run("attendance", f, "--present", "5").returncode == 2

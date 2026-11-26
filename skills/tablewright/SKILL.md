@@ -52,7 +52,9 @@ Comfort levels: a safety plan may add `comfort` ({player: {topic: none|offscreen
 - Hirelings: `tt.py hirelings roster.json` (`going_rate`, `leader_cha_mod`, `hirelings` with `name`, `pay`, `treatment`) gives each a loyalty score and the check triggers; `--roll NAME --event unpaid|abused|sent-ahead|bribe|leader-down --seed N` rolls d100.
 - City districts: `tt.py district districts.json` (`name`, `watch`, `bribe`, `gate`, `curfew`, `owner`) warns on gaps and prints one card each.
 - Chases: `tt.py chase --lead 3 --escape 6 --seed N [--table file]` (lines `complication;shift`) runs opposed d6 rounds until caught or escaped.
-- Fight pressure in `prep`: tag fights `treat:` (an edge to find) or `timer:`; a harder fight or climax should turn two of damage, disruption (`hazard:`/`terrain:`), duration (`timer:`), or say `levers: a, b`. Session logs take `ending: countdown|hook|choice|ran-long`; `review` counts them.
+- Fight pressure in `prep`: tag fights `treat:` (an edge to find) or `timer:`; a harder fight or climax should turn two of damage, disruption (`hazard:`/`terrain:`), duration (`timer:`), or say `levers: a, b`. Fights may add `stakes: position|assets|character|party` (vary them; a climax risks character or party). Session logs take `ending: countdown|hook|choice|ran-long`, `ended_mid_fight:` and `recap:`; `review` counts endings and warns on missing recaps.
+- House rules may add `situation:` and `distinguishes:`; same situation ruled two ways warns.
+- Attendance: `tt.py attendance roster.json --present N --dynamic collective|competitive|individualist` warns at half or fewer and says what absent PCs do.
 - Foe roles: `encounter --foe 3:brute`; prints a role count, warns when 4+ foes share one role.
 - Overland travel: `tt.py travel --miles 48 --terrain forest --hours 8 [--known]` gives miles a day (pace times terrain), days, +25% on an unknown route and a fatigue point per hour past 8. Multipliers are ours.
 

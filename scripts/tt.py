@@ -22,6 +22,7 @@ Commands:
   hirelings   hireling loyalty from pay, treatment, charisma; --roll a check
   district    check city district cards (watch, bribe, gate, curfew, owner)
   chase       seeded city pursuit with complications
+  attendance  players present against the roster; advice for absent PCs
   licence     notices for the bundled rules tables
 
 Exit 2 is a usage or validation error.
@@ -504,6 +505,7 @@ def tag(text, key):
 
 
 DIFF_RANK = {"trivial": 0, "easy": 1, "low": 1, "moderate": 2, "hard": 3, "high": 3, "severe": 4, "deadly": 4, "extreme": 5}
+STAKES = ("position", "assets", "character", "party")
 LEVERS = {"damage": ("damage",), "disruption": ("hazard", "terrain"), "duration": ("timer", "clock")}
 
 
@@ -581,6 +583,14 @@ def cmd_prep(a):
                              f"raise two of damage, disruption, duration: {f}")
         if rank is not None:
             prev = rank
+    stakes = [(f, tag(f, "stakes")) for f in bullets("fights") if tag(f, "stakes")]
+    for f, s in stakes:
+        if s not in STAKES:
+            errs.append(f"stakes: {s}, use {', '.join(STAKES)}")
+        elif "climax" in f.lower() and STAKES.index(s) < STAKES.index("character"):
+            warns.append(f"climax risks only {s}; a climax should put a character or the party on the line: {f}")
+    if len(stakes) >= 2 and len({s for _, s in stakes}) == 1:
+        warns.append(f"every rated fight risks {stakes[0][1]}; vary what is at stake")
     false = [l for l in leads if "(false)" in l.lower()]
     if false and len(false) >= len(leads) - len(false):
         warns.append(f"{len(false)} false leads of {len(leads)}; keep them fewer than the real ones")
@@ -682,6 +692,8 @@ SESSION_LOG = """# Session {n} log
 ## Next opening
 - where the next session starts
 - ending: countdown | hook | choice | ran-long (how this session stopped)
+- ended_mid_fight: no
+- recap: two lines read aloud to open next session
 """
 ENDINGS = ("countdown", "hook", "choice", "ran-long")
 
@@ -1450,13 +1462,20 @@ def cmd_review(a):
     hi, weak, fixes, ends = {}, {}, [], {}
     for f in a.logs:
         text = Path(f).read_text(encoding="utf-8")
+        recap = False
         for line in text.splitlines():
             k, _, v = line.lstrip("-* ").partition(":")
             v = v.strip().lower()
+            if k.strip().lower() == "recap" and v and not v.startswith("two lines read aloud"):
+                recap = True
+            if k.strip().lower() == "ended_mid_fight" and v in ("yes", "true", "y"):
+                print(f"warn: {f}: ended mid-fight; open next time with the board as it stood and a quick recap of positions")
             if k.strip().lower() == "ending" and v and "|" not in v:
                 ends[v] = ends.get(v, 0) + 1
                 if v not in ENDINGS:
                     print(f"warn: {f}: ending {v!r}, use " + ", ".join(ENDINGS))
+        if not recap:
+            print(f"warn: {f}: no recap: line; write two lines to read aloud next session")
         sec = prep_sections(text)
         for key, tally in (("highlights", hi), ("weak points", weak)):
             for line in sec.get(key, []):
@@ -1502,6 +1521,16 @@ def cmd_houserules(a):
             warns.append(f"{name}: removed with no offset; whatever relied on it (a class, a threat) is now off balance")
         if r.get("kind") in ("add", "change") and not r.get("review_after"):
             warns.append(f"{name}: no review_after (sessions until the table decides to keep it)")
+    seen = {}
+    for r in rules:
+        sit = str(r.get("situation") or r.get("trigger") or "").strip().lower()
+        if not sit:
+            continue
+        for o in seen.get(sit, []):
+            if o.get("rule") != r.get("rule") and not o.get("distinguishes") and not r.get("distinguishes"):
+                warns.append(f"{o.get('rule')!r} and {r.get('rule')!r} rule the same situation ({sit}) differently; "
+                             "add 'distinguishes:' saying what sets them apart, or merge them")
+        seen.setdefault(sit, []).append(r)
     report(errs, warns, f"{len(rules)} house rule(s) with reasons")
 
 
@@ -1722,6 +1751,31 @@ def cmd_chase(a):
     print(f"after {a.rounds} rounds the lead is {lead}: the quarry goes to ground; search or let them go")
 
 
+ABSENT_PCS = {
+    "collective": "the group shares one goal: absent PCs stay with the group as quiet background, take no risks and earn the same rewards",
+    "competitive": "players pursue rival aims: absent PCs step out of the story (busy elsewhere) so nobody gains or loses ground while away",
+    "individualist": "each PC follows a separate thread: pause the absent players' threads and play the present ones' own scenes",
+}
+
+
+def cmd_attendance(a):
+    """Roster (JSON list, {"pcs": [...]}, or one name per line) and how many came; advice for absent PCs."""
+    text = Path(a.roster).read_text(encoding="utf-8")
+    try:
+        d = json.loads(text)
+        pcs = d.get("pcs", []) if isinstance(d, dict) else d
+    except json.JSONDecodeError:
+        pcs = [l.strip() for l in text.splitlines() if l.strip() and not l.startswith("#")]
+    n = len(pcs)
+    if not n or not 0 <= a.present <= n:
+        die(f"--present must be 0 to {n} (roster size)")
+    print(f"{a.present} of {n} present")
+    if a.present * 2 <= n:
+        print("warn: half or fewer present; consider a side adventure, a one-shot, or moving the session")
+    if a.present < n:
+        print(f"absent PCs ({a.dynamic}): {ABSENT_PCS[a.dynamic]}")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1862,6 +1916,10 @@ def main(argv=None):
     s.add_argument("--lead", type=int, default=3); s.add_argument("--escape", type=int, default=6)
     s.add_argument("--rounds", type=int, default=10); s.add_argument("--table", help="file of 'complication;shift' lines")
     s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_chase)
+    s = sub.add_parser("attendance", help="who came and what to do with absent PCs")
+    s.add_argument("roster"); s.add_argument("--present", type=int, required=True)
+    s.add_argument("--dynamic", choices=list(ABSENT_PCS), default="collective")
+    s.set_defaults(fn=cmd_attendance)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
