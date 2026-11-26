@@ -30,6 +30,13 @@ Commands:
   alert       dungeon alert track (init, raise, lower, show)
   backlog     check a campaign hook backlog (5 to 15 open, worsens, ties)
   negotiate   multi-step negotiation, one attitude step per exchange
+  spell       spell cost (tier x power) and homebrew spell checks
+  rewards     check a reward ladder (cadence, triggers, gates)
+  vendors     vendor tiers, reach and prices as days of wage
+  mob         mob members dropped by big hits; left or routed
+  hack        hacking difficulty from system and modifiers
+  settlement  check a settlement card (size band, civic kit, function)
+  favor       seeded favor request by relation and risk
   licence     notices for the bundled rules tables
 
 Exit 2 is a usage or validation error.
@@ -322,9 +329,25 @@ def show(d, public=False):
     for i, c in enumerate(d["order"]):
         mark = ">" if i == d["turn"] else ("+" if i == deck else " ")
         conds = (" [" + ", ".join(c["conditions"]) + "]") if c["conditions"] else ""
+        conds += "".join(f" ({e['name']} {e['rounds']}r)" for e in c.get("effects", []))
         state = " DOWN" if c["hp"] <= 0 else ""
         hp = f"took {c['max_hp'] - c['hp']}" if public else f"{c['hp']}/{c['max_hp']}"
         print(f"{mark} {c['init']:>3} {c['name']:<16} {hp}{state}{conds}")
+
+
+def tick_effects(d):
+    """A new round: every effect loses a round; at 0 it ends and is logged."""
+    for c in d["order"]:
+        keep = []
+        for e in c.get("effects", []):
+            e["rounds"] -= 1
+            if e["rounds"] > 0:
+                keep.append(e)
+            else:
+                d["log"].append(f"r{d['round']} {c['name']}: {e['name']} ended")
+                print(f"{c['name']}: {e['name']} ended")
+        if "effects" in c:
+            c["effects"] = keep
 
 
 def cmd_tracker(a):
@@ -369,6 +392,7 @@ def cmd_tracker(a):
                 i += 1
                 if i >= len(d["order"]):
                     i, d["round"] = 0, d["round"] + 1
+                    tick_effects(d)
                 if d["order"][i]["hp"] > 0:
                     break
             d["turn"] = i
@@ -381,6 +405,17 @@ def cmd_tracker(a):
                 c["conditions"] = [x for x in c["conditions"] if x != cond]
             elif cond not in c["conditions"]:
                 c["conditions"].append(cond)
+        elif a.action == "effect":
+            if len(a.args) < 3:
+                die("effect NAME EFFECT ROUNDS")
+            c = find(d, a.args[0])
+            try:
+                n = int(a.args[-1])
+            except ValueError:
+                die("effect rounds must be a number")
+            if n < 1:
+                die("effect rounds must be at least 1")
+            c.setdefault("effects", []).append({"name": " ".join(a.args[1:-1]), "rounds": n})
         elif a.action == "add":
             if len(a.args) != 1 or len(a.args[0].split(":")) != 3:
                 die("add name:initiative:hp")
@@ -893,6 +928,15 @@ def cmd_villain(a):
         if not key("absent"):
             warns.append(f"{name}: no absent: (what they do if the party never comes for them)")
         where = [p for w in key("where") for p in w.replace("|", ",").split(",") if p.strip()]
+        dd = key("drive_die")
+        if dd:
+            import re
+            m = re.fullmatch(r"d(\d+)", dd[0].lower())
+            if not m:
+                die(f"{name}: drive_die {dd[0]!r}, use dN")
+            nums = sorted(int(x.split(".", 1)[0]) for x in (l.strip() for l in lines) if re.match(r"\d+\.\s", x))
+            if nums != list(range(1, int(m.group(1)) + 1)):
+                die(f"{name}: drive_die {dd[0]} wants actions numbered 1 to {m.group(1)}, found {nums}")
         if key("where") and len(where) < 2:
             warns.append(f"{name}: met in one place only; give two or more (where: a, b) so a missed scene is not a lost villain")
     if not sec:
@@ -997,6 +1041,15 @@ def cmd_campaign(a):
                 warns.append(f"sergeant {sg.get('name', '?')}: no plan of their own")
         if not org.get("sergeants"):
             warns.append("org has no sergeants (mid-level leaders with their own plans)")
+    if c.get("travel") == "unlimited" and not c.get("travel_limit"):
+        errs.append("travel: unlimited with no travel_limit (what still costs or stops a jump)")
+    if "nemesis" in c or "travel" in c:
+        nem = c.get("nemesis")
+        roster = c.get("roster") or c.get("pcs") or []
+        if not nem:
+            warns.append("no nemesis (a foe tied to one PC)")
+        elif roster and nem.get("pc") not in roster:
+            warns.append(f"nemesis {nem.get('name', '?')} is not tied to a roster PC")
     report(errs, warns, f"{len(adv)} adventures, {len(c.get('pcs', []))} PCs with plotlines")
 
 
@@ -1115,6 +1168,14 @@ def cmd_party(a):
             errs.append(f"{n}: entry {e!r}, use {', '.join(PARTY_ENTRY)}")
         elif p.get("joined_mid") and not e:
             warns.append(f"{n}: joined mid-campaign with no entry ({', '.join(PARTY_ENTRY)}): how they meet the party")
+    roles = [x for x in (a.roles.split(",") if a.roles else d.get("roles", [])) if x]
+    if roles:
+        for p in pcs:
+            if len(pcs) > 1 and set(roles) <= set(p.get("roles", [])):
+                warns.append(f"{p.get('name', '?')} covers every role; spread them so each PC has a job")
+        for r in roles:
+            if not any(r in p.get("roles", []) for p in pcs):
+                warns.append(f"role {r} has no owner")
     for r in d.get("reveals", []):
         if not r.get("fallback"):
             errs.append(f"reveal with no fallback if the players guess or skip it: {r.get('text', '?')[:40]}")
@@ -1299,6 +1360,19 @@ def cmd_table(a):
             warns.append(f"when values {bad}; use moving, camped or any")
         if len(set(whens)) == 1 and whens[0] != "any":
             warns.append(f"every row is {whens[0]}; give the other state some rows too")
+    for r in rows:
+        ref = (r.get("sub") or "").strip()
+        if not ref:
+            continue
+        f, _, dn = ref.partition(":")
+        sp = Path(a.table).parent / f
+        if not sp.exists():
+            errs.append(f"roll {r['roll']}: sub-table {f} not found")
+            continue
+        srows, scov, serrs = read_table(sp)
+        faces = int(dn.lstrip("dD")) if dn else (max(scov) if scov else 0)
+        if len(srows) != faces:
+            errs.append(f"roll {r['roll']}: sub-table {f} has {len(srows)} rows for a d{faces}; one row per face")
     share = fights / top if top else 0
     if share > a.max_fight:
         warns.append(f"fights fill {share:.0%} of the table, over {a.max_fight:.0%}; travel should be mostly other things")
@@ -2168,6 +2242,211 @@ def travel_checks(a, whole):
               f"{'-3 big group, ' if a.group >= 6 else ''}one check per half day; a failure loses the trail until a new sign)")
 
 
+# ---- 0.13.0 ----
+
+def cmd_spell(a):
+    if a.action == "cost":
+        if a.tier not in range(1, 5) or a.power not in range(1, 5):
+            die("--tier and --power must be 1 to 4")
+        c = min(16, a.tier * a.power)
+        if a.mastered:
+            c = max(1, c // 2)
+        print(f"cost {c} (tier {a.tier} x power {a.power}, cap 16{', mastered: halved, floor 1' if a.mastered else ''})")
+        return
+    if not a.file:
+        die("spell check FILE.json")
+    spell_check(json.loads(Path(a.file).read_text(encoding="utf-8")))
+
+
+# Our own per-tier caps for homebrew spells (tablewright defaults, not from any book):
+# tier: (max targets, max range band, max duration in rounds).
+SPELL_CAPS = {1: (1, "near", 1), 2: (3, "far", 3), 3: (6, "far", 10), 4: (12, "distant", 100)}
+SPELL_RANGES = ("close", "near", "far", "distant")
+SPELL_COOLDOWN = {2: 1, 3: 7, 4: 30}
+
+
+def spell_check(d):
+    import datetime
+    spells = d if isinstance(d, list) else d.get("spells", [])
+    known = d.get("known", {}) if isinstance(d, dict) else {}
+    errs, warns, last, dated = [], [], {}, []
+    for s in spells:
+        n, t = s.get("name", "?"), s.get("tier")
+        if t not in SPELL_CAPS:
+            errs.append(f"{n}: tier {t!r}, use 1 to 4")
+            continue
+        mt, mr, md = SPELL_CAPS[t]
+        if not isinstance(s.get("targets"), int) or s["targets"] > mt:
+            errs.append(f"{n}: targets {s.get('targets')!r}, tier {t} cap is {mt}")
+        r = s.get("range")
+        if r not in SPELL_RANGES:
+            errs.append(f"{n}: range {r!r}, use " + ", ".join(SPELL_RANGES))
+        elif SPELL_RANGES.index(r) > SPELL_RANGES.index(mr):
+            errs.append(f"{n}: range {r}, tier {t} cap is {mr}")
+        if not isinstance(s.get("duration"), int) or s["duration"] > md:
+            errs.append(f"{n}: duration {s.get('duration')!r} rounds, tier {t} cap is {md}")
+        sch = s.get("school")
+        if sch is not None:
+            cap = min(4, max(1, known.get(sch, 0)))
+            if t > cap:
+                errs.append(f"{n}: tier {t} in {sch}, but {known.get(sch, 0)} known there allows tier {cap} at most")
+        if t in SPELL_COOLDOWN:
+            if not s.get("created"):
+                warns.append(f"{n}: no created date, cooldown not checked")
+                continue
+            try:
+                dated.append((datetime.date.fromisoformat(s["created"]), t, n))
+            except ValueError:
+                errs.append(f"{n}: created {s['created']!r} is not YYYY-MM-DD")
+    for day, t, n in sorted(dated):
+        if t in last and (day - last[t][0]).days < SPELL_COOLDOWN[t]:
+            errs.append(f"{n}: tier {t} created {(day - last[t][0]).days} days after {last[t][1]}, "
+                        f"cooldown is {SPELL_COOLDOWN[t]} days")
+        last[t] = (day, n)
+    report(errs, warns, f"{len(spells)} spells")
+
+
+def cmd_rewards(a):
+    d = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    tiers = d if isinstance(d, list) else d.get("tiers", [])
+    errs, warns, prev = [], [], None
+    for t in tiers:
+        n, c = t.get("name", "?"), t.get("cadence_sessions")
+        if not isinstance(c, (int, float)):
+            errs.append(f"{n}: no cadence_sessions")
+        else:
+            if prev is not None and c <= prev:
+                errs.append(f"{n}: cadence {c} sessions does not lengthen past the tier before ({prev})")
+            prev = c
+        if len(t.get("triggers", [])) < 3:
+            errs.append(f"{n}: {len(t.get('triggers', []))} triggers, want 3+")
+        if not t.get("gate"):
+            warns.append(f"{n}: no gate (what must happen before this tier opens)")
+    report(errs, warns, f"{len(tiers)} reward tiers")
+
+
+def cmd_vendors(a):
+    with open(a.vendors, encoding="utf-8", newline="") as f:
+        vend = list(csv.DictReader(f))
+    with open(a.prices, encoding="utf-8", newline="") as f:
+        prices = list(csv.DictReader(f))
+    try:
+        vend = [(v["vendor"], int(v["tier"]), int(v["reach"])) for v in vend]
+        prices = [(p["item"], int(p["tier"]), float(p["price"])) for p in prices]
+    except (KeyError, ValueError, TypeError) as e:
+        die(f"vendors want vendor,tier,reach and prices item,tier,price: {e}")
+    if a.wage <= 0:
+        die("--wage must be above 0")
+    errs = []
+    have = {t for _, t, _ in vend}
+    for t in sorted({t for _, t, _ in prices} - have):
+        errs.append(f"item tier {t} has no vendor")
+    for v1, t1, r1 in vend:
+        for v2, t2, r2 in vend:
+            if t2 > t1 and r2 < r1:
+                errs.append(f"{v2} (tier {t2}) is easier to reach ({r2}) than {v1} (tier {t1}, reach {r1})")
+    by = {}
+    for _, t, p in prices:
+        by.setdefault(t, []).append(p)
+    ts = sorted(by)
+    for x, y in zip(ts, ts[1:]):
+        if min(by[y]) < max(by[x]):
+            errs.append(f"prices drop from tier {x} (up to {max(by[x]):g}) to tier {y} (from {min(by[y]):g})")
+    for n, t, p in prices:
+        print(f"{n} (tier {t}): {p:g} = {p / a.wage:.1f} days of wage {a.wage:g}")
+    report(errs, [], f"{len(vend)} vendors, {len(prices)} prices")
+
+
+def cmd_mob(a):
+    if a.count < 1 or a.hp_each < 1:
+        die("--count and --hp-each must be at least 1")
+    left = a.count
+    for h in a.hits:
+        if h >= a.hp_each and left > 0:
+            left -= 1
+    state = "destroyed" if left == 0 else ("routed" if left <= a.count // 2 else "holding")
+    print(f"left {left} of {a.count}, {state} (a hit of {a.hp_each}+ drops one member; routs at half or fewer)")
+
+
+HACK_EASY = ("wired", "familiar", "quiet")
+HACK_HARD = ("remote", "foreign", "combat", "jammed")
+
+
+def cmd_hack(a):
+    mods = [m for x in (a.mods or []) for m in x.split(",") if m]
+    bad = [m for m in mods if m not in HACK_EASY + HACK_HARD]
+    if bad:
+        die(f"unknown mods {bad}; easy: {', '.join(HACK_EASY)}; hard: {', '.join(HACK_HARD)}")
+    net = sum(m in HACK_HARD for m in mods) - sum(m in HACK_EASY for m in mods)
+    diff = "easy" if net < 0 else "hard" if net > 0 else "normal"
+    if a.system == "own":
+        print("own system: automatic, no roll")
+    elif a.system == "simple":
+        print(f"simple system: one check, {diff}")
+    else:
+        print(f"secure system: an attempt (a failure costs something), {diff}")
+
+
+# Our own settlement bands and population ranges (tablewright defaults).
+SETTLE_BANDS = [("thorp", 1, 20), ("hamlet", 21, 100), ("village", 101, 1000), ("small town", 1001, 2500),
+                ("large town", 2501, 6000), ("small city", 6001, 12000), ("large city", 12001, 25000),
+                ("metropolis", 25001, 10 ** 9)]
+SETTLE_FUNCTIONS = {"trade hub": ("lodging", "stables", "smith"), "port": ("docks", "lodging", "chandler"),
+                    "mining": ("smith", "assayer", "provisioner"), "farming": ("mill", "market"),
+                    "religious": ("temple", "lodging"), "military": ("barracks", "smith", "armory")}
+
+
+def cmd_settlement(a):
+    c = json.loads(Path(a.card).read_text(encoding="utf-8"))
+    names = [b[0] for b in SETTLE_BANDS]
+    size, pop = c.get("size"), c.get("population")
+    errs, warns = [], []
+    if size not in names:
+        die(f"size {size!r}, use " + ", ".join(names))
+    i = names.index(size)
+    _, lo, hi = SETTLE_BANDS[i]
+    if not isinstance(pop, int) or not lo <= pop <= hi:
+        errs.append(f"population {pop!r} does not fit {size} ({lo} to {hi})")
+    civic = {x.lower() for x in c.get("civic", [])}
+    need = ["authority"] if i >= 1 else []
+    if i >= 2:
+        need += ["council", "defence", "hall"]
+    if i >= 3:
+        need.append("walls")
+        if c.get("inns", 0) < 2:
+            errs.append(f"{size}: {c.get('inns', 0)} inns, a town or bigger wants 2+")
+    for k in need:
+        if k not in civic:
+            errs.append(f"{size}: no {k} in civic")
+    biz = {x.lower() for x in c.get("businesses", [])}
+    fns = c.get("function") or []
+    for fn in [fns] if isinstance(fns, str) else fns:
+        if fn not in SETTLE_FUNCTIONS:
+            warns.append(f"function {fn!r} has no kit; known: " + ", ".join(SETTLE_FUNCTIONS))
+            continue
+        for b in SETTLE_FUNCTIONS[fn]:
+            if b not in biz:
+                errs.append(f"function {fn}: no {b} among businesses")
+    report(errs, warns, f"{c.get('name', 'settlement')}: {size}, {pop}")
+
+
+# Our own favor odds: base percent by relation, minus a risk penalty; the debt size by risk.
+FAVOR_BASE = {"acquaintance": 30, "business": 50, "friend": 75}
+FAVOR_RISK = {"low": (0, ("minor",)), "moderate": (15, ("minor", "moderate")), "high": (30, ("moderate", "major"))}
+
+
+def cmd_favor(a):
+    import random
+    rng = random.Random(a.seed)
+    pen, sizes = FAVOR_RISK[a.risk]
+    chance = FAVOR_BASE[a.relation] - pen
+    roll = rng.randint(1, 100)
+    if roll > chance:
+        print(f"d100 {roll} vs {chance}: refused")
+    else:
+        print(f"d100 {roll} vs {chance}: granted, a {rng.choice(sizes)} favor; you owe one back")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -2193,7 +2472,7 @@ def main(argv=None):
         s.add_argument("--json", action="store_true")
         s.set_defaults(fn=fn)
     t = sub.add_parser("tracker", help="initiative and HP tracker")
-    t.add_argument("action", choices=["init", "add", "hit", "heal", "next", "late", "cond", "show"])
+    t.add_argument("action", choices=["init", "add", "hit", "heal", "next", "late", "cond", "effect", "show"])
     t.add_argument("--timer", type=int, help="init: seconds per player turn; 'late' delays whoever runs out")
     t.add_argument("args", nargs="*")
     t.add_argument("--file", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "tracker.json"))
@@ -2254,7 +2533,8 @@ def main(argv=None):
     s.add_argument("--anomaly", help="the story reason for an odd count")
     s.set_defaults(fn=cmd_venues)
     s = sub.add_parser("party", help="check PC ties, plot ties and plan B for reveals")
-    s.add_argument("file"); s.set_defaults(fn=cmd_party)
+    s.add_argument("file"); s.add_argument("--roles", help="comma list of roles the party needs (else the file's roles)")
+    s.set_defaults(fn=cmd_party)
     s = sub.add_parser("strength", help="average party level and party strength against the target")
     s.add_argument("levels", type=int, nargs="+"); s.add_argument("--target-level", type=int, required=True)
     s.add_argument("--target-size", type=int, default=5); s.set_defaults(fn=cmd_strength)
@@ -2342,6 +2622,27 @@ def main(argv=None):
     s.add_argument("--exchange", type=int, action="append", help="modifier for one exchange; repeat per exchange")
     s.add_argument("--rolls", type=int, nargs="*", help="use these 2d6 results in order")
     s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_negotiate)
+    s = sub.add_parser("spell", help="spell cost, or check homebrew spells")
+    s.add_argument("action", choices=["cost", "check"]); s.add_argument("file", nargs="?")
+    s.add_argument("--tier", type=int); s.add_argument("--power", type=int); s.add_argument("--mastered", action="store_true")
+    s.set_defaults(fn=cmd_spell)
+    s = sub.add_parser("rewards", help="check a reward ladder: cadence lengthens, 3+ triggers, gates")
+    s.add_argument("file"); s.set_defaults(fn=cmd_rewards)
+    s = sub.add_parser("vendors", help="vendor tiers and reach against item prices")
+    s.add_argument("vendors"); s.add_argument("prices"); s.add_argument("--wage", type=float, default=1.0)
+    s.set_defaults(fn=cmd_vendors)
+    s = sub.add_parser("mob", help="a mob as one stat block: big hits drop members")
+    s.add_argument("--count", type=int, required=True); s.add_argument("--hp-each", type=int, required=True)
+    s.add_argument("hits", nargs="*", type=int); s.set_defaults(fn=cmd_mob)
+    s = sub.add_parser("hack", help="hacking difficulty from system and modifiers")
+    s.add_argument("--system", choices=["own", "simple", "secure"], required=True)
+    s.add_argument("--mods", nargs="*"); s.set_defaults(fn=cmd_hack)
+    s = sub.add_parser("settlement", help="check a settlement card: band, civic kit, function")
+    s.add_argument("card"); s.set_defaults(fn=cmd_settlement)
+    s = sub.add_parser("favor", help="ask an NPC a favor, seeded")
+    s.add_argument("--relation", choices=list(FAVOR_BASE), required=True)
+    s.add_argument("--risk", choices=list(FAVOR_RISK), required=True); s.add_argument("--seed", type=int)
+    s.set_defaults(fn=cmd_favor)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)

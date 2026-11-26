@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.13.0 (2026-11-26)
+- `tt.py spell cost --tier 1-4 --power 1-4 [--mastered]`: cost is tier times power, capped at 16; mastered halves it (round down, floor 1); out-of-range values exit 2. Idea from ICRPG Magic (Runehammer), pp. 19 and 21.
+- `tt.py spell check FILE.json`: homebrew spells (`tier`, `targets`, `range`, `duration`, `school`, `created`) against our own per-tier caps (`SPELL_CAPS` in tt.py), a creation cooldown (tier II a day, III a week, IV 30 days) and a learn cap (tier up to the spells known in that school, 4 at most). Idea from ICRPG Magic, pp. 19 and 23-24.
+- `tt.py tracker effect NAME EFFECT ROUNDS`: a countdown effect on a combatant; each new round takes one off and it ends at 0. Idea from ICRPG Magic, p. 26.
+- `tt.py rewards FILE.json`: a reward ladder fails when cadence (`cadence_sessions`) does not lengthen tier to tier or a tier has under 3 `triggers`; warns with no `gate`. Idea from ICRPG Worlds (Runehammer), pp. 8, 15 and 17.
+- `tt.py vendors VENDORS.csv PRICES.csv [--wage N]`: fails when an item tier has no vendor, a rarer tier sits at an easier reach, or prices drop as tier rises; prints each price as days of wage. Idea from ICRPG Worlds, p. 16.
+- `tt.py party [--roles a,b]`: PCs may list `roles`; warns on a PC covering every role and on a role nobody owns. Idea from ICRPG Worlds, p. 14.
+- `tt.py table`: a `sub` column (`file.csv:dN`) names a nested table; its row count must equal its die faces. Idea from ICRPG Worlds, p. 68.
+- `tt.py campaign`: `travel: unlimited` needs `travel_limit`; warns with no `nemesis` or one not tied to a roster PC. Idea from ICRPG Worlds, p. 66, and Vigilante City (Hit Point Press), p. 31.
+- `tt.py villain`: `drive_die: dN` needs exactly N numbered actions (exit 2). Idea from Vigilante City, p. 31.
+- `tt.py mob --count N --hp-each H HITS...`: each hit of H or more drops one member; prints members left and whether the mob routs (half or fewer, our number). Idea from Vigilante City, p. 32.
+- `tt.py hack --system own|simple|secure --mods ...`: own is automatic, simple a check, secure an attempt; easy mods (wired, familiar, quiet) and hard mods (remote, foreign, combat, jammed) cancel pairwise to easy, normal or hard. Idea from Altered State (Runehammer), p. 38.
+- `tt.py settlement card.json`: our own eight size bands (thorp to metropolis) with our population ranges, a civic kit per band and businesses each function needs. Idea from the Kobold Campaign Builder: Cities and Towns (Kobold Press), pp. 7-20.
+- `tt.py favor --relation acquaintance|business|friend --risk low|moderate|high --seed N`: a seeded favor roll with our own odds; a low-risk favor is never major. Idea from Cities and Towns, pp. 182-185.
+- 13 new tests; all wording, caps, bands and odds are ours and unverified.
+
 ## 0.12.0 (2026-11-26)
 - `tt.py oneshot card.json`: a one-shot card with `bond` (professional, family, forced), `plot`, `finish` and `pregens` (`role`, 2+ `questions`, `stake`); fails on no bond, no finish, a pregen with no stake or under two questions; warns on shared roles and a finish that is only a payout. Idea from the Kobold Guide to Gamemastering (Kobold Press), pp. 80-82.
 - `tt.py tpk --cause gm-error|bad-luck|player-error [--keep-pcs]`: a support script and a remedy per cause (refight or concede; a short, sure recovery group; let it stand or a costly return); refuses "lesson" and "reset". Idea from the Kobold Guide to Gamemastering, pp. 142-144.
