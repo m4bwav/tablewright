@@ -1,0 +1,4 @@
+{"pcs": [{"name": "Ana", "ties": ["Bo", "Cy"], "plot_tie": "her brother is the cult's hostage"},
+         {"name": "Bo", "ties": ["Ana", "Zed"], "plot_tie": ""},
+         {"name": "Cy", "ties": ["Ana", "Bo"], "plot_tie": "owes the villain"}],
+ "reveals": [{"text": "the mayor is the cult leader"}, {"text": "the map is fake", "fallback": "a second map in the vault"}]}

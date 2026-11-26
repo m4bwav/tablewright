@@ -235,3 +235,27 @@ def test_campaign_plan():
 def test_prep_clock():
     r = run("prep", FX / "prep_clock.md")
     assert r.returncode == 1 and "shown:" in r.stdout and "clock step without a consequence" in r.stdout
+
+
+def test_hooks():
+    r = run("hooks", FX / "hooks.json")
+    assert r.returncode == 1 and "framed hook with no followup" in r.stdout and "no separate truth" in r.stdout
+    assert "Two guilds brawl in the square: no district:" in r.stdout and "colour-only" not in r.stdout
+
+
+def test_tavern():
+    r = run("tavern", FX / "tavern.json")
+    assert r.returncode == 1 and "two factions" in r.stdout and "house special" in r.stdout
+    assert "no battlemap" in r.stdout and "where to go" in r.stdout and "is fight" in r.stdout and "no hook for Bo" in r.stdout
+
+
+def test_venues():
+    r = run("venues", "--population", "10000", "--taverns", "1", "--inns", "0")
+    assert r.returncode == 1 and "no inn" in r.stdout and "1 taverns, expected about 5" in r.stdout
+    assert run("venues", "--population", "10000", "--taverns", "1", "--inns", "2", "--anomaly", "dry town").returncode == 0
+
+
+def test_party():
+    r = run("party", FX / "party.json")
+    assert r.returncode == 1 and "Bo: tie to Zed" in r.stdout and "Bo: no plot_tie" in r.stdout
+    assert "the mayor" in r.stdout and "the map is fake" not in r.stdout
