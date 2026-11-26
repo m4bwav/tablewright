@@ -1,0 +1,6 @@
+{"name": "The Gilded Eel", "role": "adventure", "location": "docks", "hook": "a missing cook",
+ "rooms": ["taproom", "kitchen"], "npcs": ["owner"], "furnishing": "a ship's wheel chandelier",
+ "menu": [{"item": "eel pie", "price": 4}], "expects": ["combat"], "map": "none",
+ "conflict": {"type": "rivalry", "factions": ["owner"]},
+ "hooks": [{"text": "meet the smuggler", "for": ["Ana"]}],
+ "encounters": [{"type": "fight"}, {"type": "fight"}, {"type": "fight"}], "pcs": ["Ana", "Bo"]}

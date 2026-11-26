@@ -640,6 +640,116 @@ def cmd_campaign(a):
     report(errs, warns, f"{len(adv)} adventures, {len(c.get('pcs', []))} PCs with plotlines")
 
 
+FOLLOWUP_SHAPES = ("framed", "accused", "mistaken", "ambush")
+
+
+def cmd_hooks(a):
+    """Hook deck JSON list of {text, shape, district, stakes, choice, followup, truth, rumour}."""
+    hs = json.loads(Path(a.deck).read_text(encoding="utf-8"))
+    errs, warns = [], []
+    shapes = {}
+    for i, h in enumerate(hs):
+        n = h.get("text", f"#{i + 1}")[:40]
+        for k in ("shape", "district", "stakes"):
+            if not h.get(k):
+                errs.append(f"{n}: no {k}: tag")
+        if h.get("stakes") != "colour" and len(h.get("choice", [])) < 2:
+            warns.append(f"{n}: plot hook with fewer than two choices")
+        if h.get("shape") in FOLLOWUP_SHAPES and not h.get("followup"):
+            errs.append(f"{n}: {h['shape']} hook with no followup (who did it, what next)")
+        if h.get("rumour") and (not h.get("truth") or h.get("truth") == h.get("text")):
+            errs.append(f"{n}: rumour with no separate truth:")
+        if h.get("shape"):
+            shapes[h["shape"]] = shapes.get(h["shape"], 0) + 1
+    if len(hs) >= 5:
+        top, cnt = max(shapes.items(), key=lambda kv: kv[1], default=("", 0))
+        if cnt / len(hs) > 0.4:
+            warns.append(f"{cnt} of {len(hs)} hooks are shape {top}; vary them")
+        colour = sum(h.get("stakes") == "colour" for h in hs) / len(hs)
+        if colour > 0.8 or colour < 0.2:
+            warns.append(f"colour-only share is {colour:.0%}; mix colour with plot hooks")
+    report(errs, warns, f"{len(hs)} hooks")
+
+
+TAVERN_NEEDS = {
+    "map_dot": ("name",),
+    "plot_point": ("name", "location", "hook"),
+    "encounter": ("name", "location", "hook", "rooms", "menu", "npcs", "furnishing"),
+    "adventure": ("name", "location", "hook", "rooms", "menu", "npcs", "furnishing", "conflict"),
+}
+
+
+def cmd_tavern(a):
+    """Tavern card JSON: fields by role, a house special, map fits play, conflict sides, hooks say where to go."""
+    t = json.loads(Path(a.card).read_text(encoding="utf-8"))
+    errs, warns = [], []
+    role = t.get("role", "encounter")
+    if role not in TAVERN_NEEDS:
+        die(f"role must be one of {', '.join(TAVERN_NEEDS)}")
+    for k in TAVERN_NEEDS[role]:
+        if not t.get(k):
+            errs.append(f"{role} card has no {k}:")
+    if t.get("menu") and not any(m.get("special") for m in t["menu"]):
+        warns.append("no house special on the menu")
+    exp = t.get("expects", [])
+    if "combat" in exp and t.get("map") != "battlemap":
+        warns.append("combat expected but no battlemap")
+    if {"explore", "stealth"} & set(exp) and t.get("map", "none") == "none":
+        warns.append("exploration or stealth expected but no map")
+    c = t.get("conflict")
+    if c and len(c.get("factions", [])) < 2:
+        errs.append("conflict needs at least two factions")
+    for h in t.get("hooks", []):
+        if not h.get("goto"):
+            warns.append(f"hook does not say where to go: {h.get('text', '?')[:40]}")
+    kinds = {e.get("type") for e in t.get("encounters", [])}
+    if len(t.get("encounters", [])) >= 3 and len(kinds) == 1:
+        warns.append(f"every stock encounter is {kinds.pop()}; vary them")
+    pcs = t.get("pcs", [])
+    for pc in pcs:
+        if not any(pc in h.get("for", []) for h in t.get("hooks", [])):
+            warns.append(f"no hook for {pc}")
+    report(errs, warns, f"{role} card {t.get('name', '?')}")
+
+
+def cmd_venues(a):
+    """Venue counts for a settlement against one tavern per 2,000, restaurant per 3,500, inn per 5,000."""
+    errs, warns = [], []
+    for kind, per, have in (("taverns", 2000, a.taverns), ("restaurants", 3500, a.restaurants), ("inns", 5000, a.inns)):
+        want = max(1 if kind != "restaurants" else 0, round(a.population / per))
+        if have is None:
+            print(f"{kind}: about {want}")
+            continue
+        if kind != "restaurants" and have < 1:
+            errs.append(f"no {kind[:-1]}; every community has one")
+        elif want and (have > 2 * want or have * 2 < want) and not a.anomaly:
+            warns.append(f"{have} {kind}, expected about {want}; give a reason with --anomaly or adjust")
+    report(errs, warns, f"population {a.population}")
+
+
+def cmd_party(a):
+    """Party JSON {pcs: [{name, ties, plot_tie}], reveals: [{text, fallback}]}: PC ties, plot ties, plan B."""
+    d = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    pcs = d.get("pcs", [])
+    names = {p.get("name") for p in pcs}
+    errs, warns = [], []
+    need = min(2, len(pcs) - 1)
+    for p in pcs:
+        n = p.get("name", "?")
+        ties = p.get("ties", [])
+        for t in ties:
+            if t not in names or t == n:
+                errs.append(f"{n}: tie to {t}, who is not another PC")
+        if len(set(ties) & (names - {n})) < need:
+            warns.append(f"{n}: tied to fewer than {need} other PCs")
+        if not p.get("plot_tie"):
+            errs.append(f"{n}: no plot_tie to the main plot")
+    for r in d.get("reveals", []):
+        if not r.get("fallback"):
+            errs.append(f"reveal with no fallback if the players guess or skip it: {r.get('text', '?')[:40]}")
+    report(errs, warns, f"{len(pcs)} PCs, {len(d.get('reveals', []))} reveals")
+
+
 TIERS = ["minor", "moderate", "major", "legendary", "campaign"]
 YES = ("yes", "y", "true", "1")
 
@@ -757,6 +867,18 @@ def main(argv=None):
     s.add_argument("twists"); s.set_defaults(fn=cmd_twist)
     s = sub.add_parser("campaign", help="check a campaign plan")
     s.add_argument("plan"); s.set_defaults(fn=cmd_campaign)
+    s = sub.add_parser("hooks", help="check a city hook deck")
+    s.add_argument("deck"); s.set_defaults(fn=cmd_hooks)
+    s = sub.add_parser("tavern", help="check a tavern or inn card")
+    s.add_argument("card"); s.set_defaults(fn=cmd_tavern)
+    s = sub.add_parser("venues", help="taverns, restaurants and inns for a population")
+    s.add_argument("--population", type=int, required=True)
+    for k in ("taverns", "restaurants", "inns"):
+        s.add_argument("--" + k, type=int)
+    s.add_argument("--anomaly", help="the story reason for an odd count")
+    s.set_defaults(fn=cmd_venues)
+    s = sub.add_parser("party", help="check PC ties, plot ties and plan B for reveals")
+    s.add_argument("file"); s.set_defaults(fn=cmd_party)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)

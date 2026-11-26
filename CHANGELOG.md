@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0 (2026-11-26)
+- `tt.py hooks`: city hook decks (shape, district and stakes tags; two choices per plot hook; followups for framed, accused, mistaken and ambush hooks; rumours keep a separate truth; shape and colour mix). Ideas from Johnn Four, 650 City Encounters (p. 2-45) and Goodman Games, GM Gems (p. 8-9).
+- `tt.py tavern`: tavern and inn cards by role (map dot, plot point, encounter, adventure), a house special, a map that fits the expected play, two-sided conflicts, hooks that say where to go, stock encounter variety and a hook per PC. Idea from the RoleplayingTips Inns, Taverns, Restaurants Design Guide (p. 13-52, 139-140).
+- `tt.py venues`: taverns, restaurants and inns for a population, with `--anomaly` for a story reason. Same guide (p. 40).
+- `tt.py party`: PCs tied to two others and to the main plot; every planned reveal has a fallback. Idea from Panshin, The Game Master (p. 21-24, 153-154).
+- 4 new tests; wording and thresholds are ours and unverified.
+
 ## 0.5.0 (2026-11-26)
 - `tt.py villain`: villain cards (want, public face, reach, indirect harms, offers with more than one option). Idea from Johnn Four, 7 Ways to Improve Your GMing (p. 13-14, 20).
 - `tt.py twist`: planned twists need a workaround when they remove an ability, spread over axes and include a positive one. Idea from McDonald, Plot Twists (p. 4-8).

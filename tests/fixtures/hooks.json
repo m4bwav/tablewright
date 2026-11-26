@@ -1,0 +1,6 @@
+[
+ {"text": "A cutpurse plants a stolen ring on a PC", "shape": "framed", "district": "market", "stakes": "local", "choice": ["run", "talk"]},
+ {"text": "Street singer mocks the guard captain", "shape": "colour", "district": "docks", "stakes": "colour"},
+ {"text": "The well is cursed", "shape": "omen", "district": "slums", "stakes": "local", "rumour": true, "choice": ["dig", "ignore"]},
+ {"text": "Two guilds brawl in the square", "shape": "brawl", "stakes": "local", "choice": ["join", "stop"]}
+]
