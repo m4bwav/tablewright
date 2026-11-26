@@ -1,0 +1,24 @@
+{
+  "destination": [
+    {"text": "the river towns", "places": [{"text": "within 25 miles of the big ford", "risk": "low"}, {"text": "a mill village off the toll road", "risk": "low"}]},
+    {"text": "the hill country", "places": [{"text": "1d10 miles past the last farm", "risk": "mid"}, {"text": "a shepherd camp in the high pasture", "risk": "mid"}]},
+    {"text": "the old forest", "places": [{"text": "3d10 miles in, past the burned watchtower", "risk": "high"}]}
+  ],
+  "patron": ["a merchant house", "a temple's almoner", "a retired captain", "a guild of masons"],
+  "motive": ["money", "a contract to honour", "helping an ally", "hurting a rival", "an old friendship", "a favour owed", "plain duty"],
+  "purpose": [
+    "carry a sealed letter that must arrive within 6 days",
+    "escort a sick witness who cannot ride fast",
+    "catch a thief with a two-day head start",
+    {"text": "guard a wagon of glassware over bad roads", "clashes": ["a shepherd camp in the high pasture"]}
+  ],
+  "mission": {
+    "objective": ["recover a stolen ledger", "rescue a hostage", "end a feud", "find out who poisoned the well"],
+    "location": ["a walled farmstead", "a toll bridge", "a ruined chapel", "a market town"],
+    "group": ["the local watch", "a band of hired blades", "a family of farmers", "travelling players"],
+    "threat": [{"text": "monsters in the hills", "risk": "mid"}, {"text": "a traitor in the patron's house", "risk": "low"}, {"text": "a spreading sickness", "risk": "high"}],
+    "object": ["a signet ring", "a map with one corner torn off", "a locked reliquary"],
+    "complication": ["an ambush on the way back", "the party must travel under false names", "the cargo is not what they were told"]
+  },
+  "arrival": ["paid in full", "paid with a 10% bonus", "two days' delay before anyone will see them", "too late: the deal is off", "a feast in their honour"]
+}

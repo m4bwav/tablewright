@@ -1,6 +1,6 @@
 # tablewright handoff
 
-Updated 2026-11-26. Current release 0.16.0 (variant, template, poison, portal, short, vote, hoard; tracker poison/countdown, encounter --solo/--throng/horde warning, chase --grid, trap --full and haunts, challenge caps), merged and tagged. Chain: plugin-backlog/ai-docs/five-wrights/HANDOFF.md.
+Updated 2026-11-26. Current release 0.17.0 (settlement blocks, journey, trade, travel --oddity, handouts, prep flow/break/scenes/review, cadence, rival, cascade, talk, islands, encounter --spike, poison potency), merged and tagged. Chain: plugin-backlog/ai-docs/five-wrights/HANDOFF.md.
 
 Done: research, tt.py (encounter, budget, tracker, sheet, check, licence), 11 tests, hub skill, references, furniture.
 Next: wiki (first page needs the browser), three eval runs per case and the trigger cases.

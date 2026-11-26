@@ -208,6 +208,11 @@ def solo_horde_warnings(a):
                           ("terrain", "the ground it uses")):
             if not getattr(a, flag):
                 w.append(f"solo with no --{flag}: {why}; a lone foe with only attacks folds to action economy")
+    if a.spike and not a.pc_hp:
+        w.append("--spike with no --pc-hp: give the lowest PC's full HP")
+    for sp in a.spike or []:
+        if a.pc_hp and sp >= a.pc_hp:
+            w.append(f"a foe's burst of {sp} can drop a PC from full ({a.pc_hp} HP) in one turn; cut it or telegraph it")
     if len(a.foe) > HORDE and not a.wave:
         w.append(f"{len(a.foe)} foes at once with no --wave: send waves of about {HORDE_WAVE} with a breather between,"
                  " or fold weak ones into a --throng")
@@ -407,10 +412,16 @@ def tick_poisons(d):
                     d["log"].append(f"r{d['round']} {c['name']}: {x['name']} ran its course")
                     print(f"{c['name']}: {x['name']} ran its course")
                     continue
-                print(f"{c['name']}: {x['name']} stage {x['stage'] + 1}: {x['stages'][x['stage']]} (save again)")
+                print(f"{c['name']}: {x['name']} stage {x['stage'] + 1}: {x['stages'][x['stage']]} (save again{dc_text(x)})")
+            elif x.get("save_each"):
+                print(f"{c['name']}: {x['name']} save again{dc_text(x)} (each round)")
             keep.append(x)
         if "poisons" in c:
             c["poisons"] = keep
+
+
+def dc_text(x):
+    return f", DC {x['dc']}" if x.get("dc") else ""
 
 
 def tick_owner(d, name):
@@ -519,8 +530,15 @@ def cmd_tracker(a):
                     die("poison interval must be a number of rounds")
                 if not stages or every < 1:
                     die("poison needs stages a,b,c and an interval of 1 or more rounds")
-                c.setdefault("poisons", []).append({"name": a.args[1], "stages": stages, "stage": 0, "every": every, "left": every})
-                print(f"{c['name']}: {a.args[1]} stage 1: {stages[0]}")
+                x = {"name": a.args[1], "stages": stages, "stage": 0, "every": every, "left": every}
+                if a.save_each:
+                    x["save_each"] = True
+                if a.dc:
+                    x["dc"] = a.dc + POTENCY.get(a.potency, 0)
+                elif a.potency:
+                    die("--potency needs --dc")
+                c.setdefault("poisons", []).append(x)
+                print(f"{c['name']}: {a.args[1]} stage 1: {stages[0]}{dc_text(x)}")
             else:
                 die("poison NAME POISON STAGE1,STAGE2,... [INTERVAL_ROUNDS], or poison cure NAME [POISON]")
         elif a.action == "countdown":
@@ -809,6 +827,22 @@ def cmd_prep(a):
             errs.append("first session: no bond: line in ## Intros (why these PCs travel together)")
     elif a.hours and not sec.get("recap"):
         warns.append("no ## Recap: open a later session with what happened last time")
+    prep_flow(bullets("flow"), errs, warns)
+    prep_scenes(sec, a, errs, warns)
+    threads = [tag(n, "thread") for n in npcs if tag(n, "thread")]
+    if players and threads:
+        for pl in players:
+            if not any(t.startswith("for") and pl.lower() in t[3:].replace(",", " ").split() for t in threads):
+                warns.append(f"{pl} has no NPC thread (tag an NPC 'thread: for {pl}')")
+    import re
+    m = re.search(r"^hours:\s*([\d.]+)", Path(a.card).read_text(encoding="utf-8"), re.M | re.I)
+    hours = float(m.group(1)) if m else a.hours
+    breaks = bullets("break")
+    if hours and hours >= 4 and not breaks:
+        warns.append(f"{hours:g} h session with no ## Break (at: hour; goal_check: fallback ending)")
+    for b in breaks:
+        if not tag(b, "goal_check"):
+            warns.append(f"break with no goal_check: (where the night ends if time runs short): {b}")
     false = [l for l in leads if "(false)" in l.lower()]
     if false and len(false) >= len(leads) - len(false):
         warns.append(f"{len(false)} false leads of {len(leads)}; keep them fewer than the real ones")
@@ -822,6 +856,148 @@ def cmd_prep(a):
     if errs:
         sys.exit(1)
     print(f"ok: opening, {len(leads)} leads, {len(npcs)} NPCs with goals")
+
+
+SCENE_KEYS = ("purpose", "closing", "type", "victory", "failure", "rules", "description", "dialog", "weather", "time",
+              "tactics", "names", "stats", "treasure", "from", "next", "bypass")
+RULES_WORDS = r"\b(water|ice|fall|falls|falling|fire|poison|poisoned|grapple|grappled|chase)\b"
+BYPASS = {"flight": ("flight", "fly", "flying"), "teleport": ("teleport", "dimension door", "misty step"),
+          "scrying": ("scry", "scrying", "clairvoyance")}
+REVIEW_PASSES = ("proofreader", "director", "playtester")
+REVIEW_DROP = ("proofreader", "playtester", "director")  # cut first to last when time runs short
+
+
+def parse_scenes(lines):
+    """'### Title' sub-sections of ## Scenes; 'key: value' lines (bullets too) become fields."""
+    scenes = []
+    for l in lines:
+        if l.startswith("### "):
+            scenes.append({"title": l[4:].strip(), "f": {}, "text": []})
+        elif scenes:
+            body = l[2:].strip() if l[:2] in ("- ", "* ") else l
+            k, _, v = body.partition(":")
+            if k.strip().lower() in SCENE_KEYS and v.strip():
+                scenes[-1]["f"][k.strip().lower()] = v.strip()
+            scenes[-1]["text"].append(body)
+    return scenes
+
+
+def prep_scenes(sec, a, errs, warns):
+    import re
+    scenes = parse_scenes(sec.get("scenes", []))
+    if not scenes:
+        if a.review:
+            errs.append("--review needs ## Scenes with ### Title sub-sections")
+        return
+    sess = " ".join(sec.get("session", [])).lower()
+    for k in ("purpose", "closing"):
+        if f"{k}:" not in sess:
+            errs.append(f"## Scenes with no session {k}: under ## Session")
+    weak = [x.strip() for x in (a.weak or "").split(",") if x.strip()]
+    strong = [x.strip() for x in (a.strong or "").split(",") if x.strip()]
+    for i, sc in enumerate(scenes):
+        t, f = sc["title"], sc["f"]
+        p = f.get("purpose")
+        if not p:
+            errs.append(f"scene {t}: no purpose: (what it is for)")
+        elif len([x for x in re.split(r"[.!?]+", p) if x.strip()]) > 1:
+            warns.append(f"scene {t}: purpose has more than one sentence; split the scene")
+        if not f.get("closing"):
+            warns.append(f"scene {t}: no closing: (how you know it is over)")
+        if f.get("type", "").lower() == "combat":
+            for k in ("victory", "failure"):
+                if not f.get(k):
+                    warns.append(f"scene {t}: combat with no {k}:")
+        for k in weak:
+            if not f.get(k):
+                warns.append(f"scene {t}: no {k}: (a weak spot you listed in --weak)")
+        for k in strong:
+            if len(f.get(k, "").split()) > 40:
+                warns.append(f"scene {t}: {k} runs over 40 words; you are strong there, write less")
+        body = " ".join(sc["text"]).lower()
+        if not f.get("rules") and re.search(RULES_WORDS, body):
+            warns.append(f"scene {t}: mentions {re.search(RULES_WORDS, body).group(1)} with no rules: line; note the rule and page")
+    if a.review:
+        prep_review(scenes, a, warns)
+
+
+def prep_review(scenes, a, warns):
+    print("review passes, run separately: " + ", ".join(REVIEW_PASSES))
+    if a.short:
+        print("short on time, drop in this order: " + ", ".join(REVIEW_DROP) + " (director last)")
+    for sc in scenes:
+        f = sc["f"]
+        if f.get("type", "").lower() == "combat" and not f.get("stats"):
+            warns.append(f"proofreader: scene {sc['title']}: foes with no stats:")
+        if "treasure" in [x.split(":", 1)[0].strip().lower() for x in sc["text"]] and not f.get("treasure") or \
+                f.get("treasure", "").lower() in ("tbd", "?", "todo"):
+            warns.append(f"proofreader: scene {sc['title']}: treasure not filled in")
+    for prev, sc in zip(scenes, scenes[1:]):
+        linked = prev["title"].lower() in sc["f"].get("from", "").lower() or sc["title"].lower() in prev["f"].get("next", "").lower()
+        if not linked:
+            warns.append(f"director: scene {sc['title']} is not linked from {prev['title']} (add from: or next:)")
+    for path in a.party or []:
+        c = load_char(path)
+        blob = json.dumps(c).lower()
+        for power, words in BYPASS.items():
+            if any(w in blob for w in words):
+                open_ = [sc["title"] for sc in scenes if not sc["f"].get("bypass")]
+                if open_:
+                    warns.append(f"playtester: {c.get('name', path)} has {power}; could it skip "
+                                 + ", ".join(open_) + "? add bypass: to each")
+
+
+def prep_flow(lines, errs, warns):
+    """## Flow bullets '- id: text -> a, b; rules: chase, social'. start and finish required."""
+    if not lines:
+        return
+    nxt, rules = {}, {}
+    for l in lines:
+        sid, _, rest = l.partition(":")
+        sid = sid.strip().lower()
+        parts = rest.split(";")
+        _, arrow, tgt = parts[0].partition("->")
+        nxt[sid] = [t.strip().lower() for t in tgt.split(",") if t.strip()] if arrow else []
+        for r in (x.strip() for x in tag(rest, "rules").split(",") if x.strip()):
+            rules.setdefault(r, []).append(sid)
+    for k in ("start", "finish"):
+        if k not in nxt:
+            errs.append(f"## Flow has no {k} scene")
+    for sid, ts in nxt.items():
+        for t in ts:
+            if t not in nxt:
+                errs.append(f"flow: {sid} leads to unknown scene {t}")
+    if "start" not in nxt or "finish" not in nxt:
+        return
+
+    def reach(src, edges):
+        seen, todo = set(), [src]
+        while todo:
+            x = todo.pop()
+            if x not in seen:
+                seen.add(x)
+                todo += edges.get(x, [])
+        return seen
+    back = {}
+    for sid, ts in nxt.items():
+        for t in ts:
+            back.setdefault(t, []).append(sid)
+    fwd, rev = reach("start", nxt), reach("finish", back)
+    for sid in sorted(fwd - rev):
+        errs.append(f"flow: {sid} is reachable from start but cannot reach finish (a dead end)")
+    for sid in sorted(set(nxt) - {"start"} - set(back)):
+        errs.append(f"flow: nothing leads to {sid}")
+
+    def paths(x, seen):
+        if x == "finish":
+            return 1
+        return sum(paths(t, seen | {t}) for t in nxt.get(x, []) if t in nxt and t not in seen)
+    n = paths("start", {"start"})
+    if n == 1:
+        warns.append("flow has one path from start to finish; add a second route so choices matter")
+    print(f"flow: {len(nxt)} scenes, {n} path(s) start to finish")
+    for r, ids in sorted(rules.items()):
+        print(f"rules cheat sheet: {r} ({', '.join(ids)})")
 
 
 def cmd_world(a):
@@ -843,6 +1019,17 @@ def cmd_world(a):
             miss = [n.rstrip(":") for n in need if n not in x.lower()]
             if miss:
                 errs.append(f"{one} missing {', '.join(miss)} (wants {why}): {x.split(':', 1)[0]}")
+    pr = [l for l in sec.get("principles", []) if l[:2] in ("- ", "* ")]
+    if "principles" in sec and not 3 <= len(pr) <= 7:
+        print(f"warn: ## Principles has {len(pr)}, want 3 to 7")
+    for l in (l[2:].strip() for l in sec.get("locations", []) if l[:2] in ("- ", "* ")):
+        name, _, rest = l.partition(":")
+        parts = [x.strip() for x in rest.split(";") if x.strip()]
+        det = [x for x in parts if not x.lower().startswith("weather:")]
+        if not 3 <= len(det) <= 5:
+            print(f"warn: location {name.strip()}: {len(det)} details, want 3 to 5")
+        if len(det) == len(parts):
+            print(f"warn: location {name.strip()}: no weather:")
     for e in errs:
         print("error: " + e)
     if errs:
@@ -907,6 +1094,9 @@ SESSION_LOG = """# Session {n} log
 ## Weak points
 - scene; players; problem; fix
 
+## Learned
+- Player: a; b; c
+
 ## Next opening
 - where the next session starts
 - ending: countdown | hook | choice | ran-long (how this session stopped)
@@ -924,6 +1114,7 @@ def cmd_sessionlog(a):
 
 
 NPC_DEPTH = ("ideal", "bond", "flaw")
+NPC_EXTRA = ("major", "secret", "joins_party", "exit", "tactics", "but")
 
 
 def cmd_npcs(a):
@@ -937,12 +1128,18 @@ def cmd_npcs(a):
         name, _, rest = n.partition(":")
         parts = [x.strip() for x in rest.split(";")]
         extra = {p.split(":", 1)[0].strip().lower(): p.split(":", 1)[1].strip()
-                 for p in parts if ":" in p and p.split(":", 1)[0].strip().lower() in NPC_DEPTH + ("major", "secret")}
+                 for p in parts if ":" in p and p.split(":", 1)[0].strip().lower() in NPC_DEPTH + NPC_EXTRA}
         parts = [p for p in parts if not (":" in p and p.split(":", 1)[0].strip().lower() in extra)]
         if extra.get("major", "").lower() in ("true", "yes"):
             for k in NPC_DEPTH:
                 if not extra.get(k) and not (k == "flaw" and extra.get("secret")):
                     errs.append(f"{name.strip()}: major NPC with no {k}" + (" or secret" if k == "flaw" else ""))
+        if extra.get("joins_party", "").lower() in ("true", "yes") and not extra.get("exit"):
+            print(f"warn: {name.strip()}: joins the party with no exit: (how and when they leave so the PCs stay the heroes)")
+        if extra.get("tactics") and "flee" not in extra["tactics"].lower():
+            print(f"warn: {name.strip()}: tactics with no flee (the HP fraction where they run, e.g. flee 1/3)")
+        if getattr(a, "but", False) and not extra.get("but") and " but " not in f" {' '.join(parts).lower()} ":
+            print(f"warn: {name.strip()}: no contradiction; add a 'but' to the look, activity or hook, or a but: field")
         if len(parts) != 3 or not all(parts):
             errs.append(f"{name.strip()}: want three parts 'look; doing now; hook because why'")
         elif "because" not in parts[2].lower():
@@ -1804,6 +2001,7 @@ def cmd_battle(a):
 def cmd_review(a):
     """Merge '## Highlights' and '## Weak points' from session logs into a per-player tally."""
     hi, weak, fixes, ends = {}, {}, [], {}
+    seen_in, learned = {}, set()
     for f in a.logs:
         text = Path(f).read_text(encoding="utf-8")
         recap, mid, have = False, False, set()
@@ -1840,6 +2038,17 @@ def cmd_review(a):
                     tally.setdefault(who, []).append(parts[2])
                 if key == "weak points":
                     fixes.append(f"{parts[0]}: {parts[3] if len(parts) > 3 and parts[3] else 'no fix written'}")
+        pres = [l for l in text.splitlines() if l.lstrip("-* ").lower().startswith("players present:")]
+        for l in pres:
+            for who in (x.strip() for x in l.split(":", 1)[1].split(",") if x.strip()):
+                seen_in[who] = seen_in.get(who, 0) + 1
+        for line in sec.get("learned", []):
+            who, _, items = line.lstrip("-* ").partition(":")
+            if who.strip() and who.strip() != "Player" and [x for x in items.split(";") if x.strip()]:
+                learned.add(who.strip())
+    for who, n in sorted(seen_in.items()):
+        if n >= 3 and who not in learned:
+            print(f"warn: {who} was present in {n} logs and never named anything learned (## Learned)")
     people = sorted(set(hi) | set(weak))
     if ends:
         print("endings: " + ", ".join(f"{k} {v}" for k, v in sorted(ends.items())))
@@ -1923,6 +2132,23 @@ def cmd_challenge(a):
             if not ms:
                 warns.append("long task with no milestones; partial progress should show and pay")
     errs += challenge_caps(d, skills, succ, warns)
+    ft = d.get("on_fail_time")
+    if ft is not None:
+        if not isinstance(ft, int) or ft < 1:
+            errs.append(f"on_fail_time {ft!r}, want minutes lost per failed check (1 or more)")
+        elif d.get("limit") and d.get("minutes") and isinstance(succ, int) and isinstance(fail, int):
+            worst = succ * d["minutes"] + (fail - 1) * (d["minutes"] + ft)
+            if worst > d["limit"]:
+                warns.append(f"with {fail - 1} failures at {ft} min each the run takes {worst} min, over the limit {d['limit']}")
+    li = d.get("lead_in")
+    if li is not None:
+        sh = li.get("dc_shift") if isinstance(li, dict) else None
+        if not isinstance(sh, int):
+            errs.append("lead_in wants dc_shift: how many points the opening scene moves every DC")
+        elif abs(sh) > 5:
+            warns.append(f"lead_in shifts DCs by {sh}; more than 5 decides the challenge before it starts")
+        else:
+            print(f"lead_in: a won opening moves DCs {-abs(sh):+d}, a lost one {abs(sh):+d}")
     mins, limit = d.get("minutes"), d.get("limit")
     if mins and limit and isinstance(succ, int) and limit < succ * mins:
         warns.append(f"limit {limit} min is under {succ} attempts x {mins} min; the clock beats a flawless run")
@@ -1954,6 +2180,25 @@ def challenge_caps(d, skills, succ, warns):
 TERRAIN = {"road": 1.0, "plains": 0.75, "forest": 0.5, "hills": 0.5, "swamp": 0.35, "mountain": 0.25, "desert": 0.5}
 
 
+def travel_oddity(a):
+    """One colour event per journey from {events: [{text, repeat, slow_offroad}], used: []}; writes the pick back."""
+    import random
+    p = Path(a.oddity)
+    d = json.loads(p.read_text(encoding="utf-8"))
+    evs = [jrow(e) for e in d.get("events", [])]
+    used = d.setdefault("used", [])
+    pool = [e for e in evs if e.get("repeat") or e["text"] not in used]
+    if not pool:
+        print("oddity: every event used; add more or tag some repeat")
+        return 1
+    e = random.Random(a.seed).choice(pool)
+    used.append(e["text"])
+    p.write_text(json.dumps(d, indent=2), encoding="utf-8", newline="\n")
+    f = e.get("slow_offroad")
+    print(f"oddity: {e['text']}" + (f" (off-road miles x{f:g})" if f and a.terrain != "road" else ""))
+    return f if f and a.terrain != "road" else 1
+
+
 def cmd_travel(a):
     """Days for a trip: pace times terrain, hours past 8 a day cost fatigue, an unknown route adds a quarter."""
     if a.watches is not None:
@@ -1967,6 +2212,8 @@ def cmd_travel(a):
     if a.miles <= 0 or a.pace <= 0 or not 1 <= a.hours <= 16:
         die("miles and pace above 0, hours 1 to 16")
     per_day = a.pace * TERRAIN[a.terrain] * a.hours / 8
+    if a.oddity:
+        per_day *= travel_oddity(a)
     days = a.miles / per_day * (1 if a.known else 1.25)
     whole = math.ceil(days - 1e-9)
     print(f"{per_day:.1f} miles a day on {a.terrain}; {whole} day(s) for {a.miles:g} miles"
@@ -2655,7 +2902,32 @@ def cmd_settlement(a):
         for b in SETTLE_FUNCTIONS[fn]:
             if b not in biz:
                 errs.append(f"function {fn}: no {b} among businesses")
+    warns += settlement_extras(c, i)
     report(errs, warns, f"{c.get('name', 'settlement')}: {size}, {pop}")
+
+
+def settlement_extras(c, i):
+    """Optional government, defence, commerce, lodgings and sights blocks; all checks are warnings."""
+    w = []
+    if i >= 3:
+        for k in ("government", "defence", "commerce"):
+            if not c.get(k):
+                w.append(f"{c.get('size')}: no {k} block; a town or bigger wants who rules, who guards and what trades")
+    d = c.get("defence")
+    if isinstance(d, dict) and d.get("patrol") and not d.get("muster"):
+        w.append("defence has a patrol but no muster: who answers when the patrol cannot cope")
+    com = c.get("commerce")
+    if isinstance(com, dict) and com.get("banned") and not com.get("black_market"):
+        w.append("commerce bans goods but has no black_market: banned goods still find a seller; say where")
+    lod = c.get("lodgings") or []
+    if len(lod) >= 2 and len({str(x.get("price")) for x in lod}) == 1:
+        w.append(f"{len(lod)} lodgings all at one price; vary them so the choice says something")
+    if lod and not any(x.get("hook") for x in lod):
+        w.append("no lodging carries a hook; give one a reason to stay there")
+    for x in c.get("sights") or []:
+        if not x.get("npc") and not x.get("hook"):
+            w.append(f"sight {x.get('name', '?')}: no npc and no hook; scenery the players will walk past")
+    return w
 
 
 # Our own favor odds: base percent by relation, minus a risk penalty; the debt size by risk.
@@ -3521,11 +3793,332 @@ def cmd_poison(a):
         dc = p.get("dc")
         if dc is not None and (not isinstance(dc, int) or not 10 <= dc <= 20):
             warns.append(f"{n}: DC {dc!r} is outside 10-20")
+        pot = p.get("potency")
+        if pot is not None:
+            if pot not in POTENCY:
+                errs.append(f"{n}: potency {pot!r}, use up or down")
+            elif isinstance(dc, int):
+                print(f"{n}: potency {pot}, DC {dc} -> {dc + POTENCY[pot]}")
+        life, age = p.get("shelf_life"), p.get("age")
+        if isinstance(life, (int, float)) and isinstance(age, (int, float)) and age > life:
+            warns.append(f"{n}: dose is {age:g} days old, past its {life:g}-day shelf life; it has lost its bite")
     report(errs, warns, f"{len(ps)} poison(s)")
+
+
+POTENCY = {"up": 2, "down": -2}  # our step: a stronger or weaker dose moves the DC by 2
 
 
 PORTAL_FIELDS = ("location", "destination", "key", "direction", "timing")
 PORTAL_DIRS = ("two-way", "one-way", "intermittent")
+
+
+def cmd_handouts(a):
+    """Handouts JSON {sessions_away, recap, handouts: [{name, purpose, sender}]}."""
+    d = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    hs = d.get("handouts", []) if isinstance(d, dict) else d
+    errs, warns = [], []
+    if not hs:
+        die("no handouts")
+    for h in hs:
+        n = h.get("name") or "?"
+        if not h.get("purpose"):
+            errs.append(f"{n}: no purpose (the clue, lead or feeling it delivers)")
+        if not h.get("sender"):
+            errs.append(f"{n}: no sender (who in the world wrote or sent it)")
+    if isinstance(d, dict) and (d.get("sessions_away") or 0) >= 2 and not d.get("recap"):
+        warns.append(f"{d['sessions_away']} sessions since this thread came up and no recap handout; remind them first")
+    report(errs, warns, f"{len(hs)} handout(s) with a purpose and a sender")
+
+
+RISKS = ("low", "mid", "high")
+MISSION = ("objective", "location", "group", "threat", "object", "complication")
+
+
+def jrow(r):
+    return r if isinstance(r, dict) else {"text": str(r)}
+
+
+def jroll(rng, rows, picked):
+    """Pick a row; reroll (up to 20 times) when it clashes with a part already picked."""
+    rows = [jrow(r) for r in rows]
+    for _ in range(20):
+        r = rng.choice(rows)
+        bad = {c.lower() for p in picked for c in p.get("clashes", [])} | {c.lower() for c in r.get("clashes", [])}
+        if not any(p.get("text", "").lower() in bad for p in picked) and r.get("text", "").lower() not in bad:
+            return r
+    return r
+
+
+def cmd_journey(a):
+    """Roll journey leads from your own tables, or --check a lead slate."""
+    import random
+    d = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    if a.check:
+        return journey_check(d.get("leads", []) if isinstance(d, dict) else d)
+    rng = random.Random(a.seed)
+    need = ["destination", "patron", "motive", "arrival"] + (["purpose"] if a.kind == "simple" else [])
+    miss = [k for k in need if not d.get(k)] + ([f"mission.{k}" for k in MISSION if not (d.get("mission") or {}).get(k)]
+                                                if a.kind == "complex" else [])
+    if miss:
+        die("tables missing: " + ", ".join(miss))
+    for i in range(1, a.leads + 1):
+        picked, out = [], []
+        dest = jroll(rng, d["destination"], picked)
+        picked.append(dest)
+        place = jroll(rng, dest["places"], picked) if dest.get("places") else None
+        if place:
+            picked.append(place)
+        out.append("destination: " + dest["text"] + (f" / {place['text']}" if place else ""))
+        parts = ["patron", "motive"] + (["purpose"] if a.kind == "simple" else [])
+        for k in parts:
+            r = jroll(rng, d[k], picked)
+            picked.append(r)
+            out.append(f"{k}: {r['text']}")
+        if a.kind == "complex":
+            for k in MISSION:
+                r = jroll(rng, d["mission"][k], picked)
+                picked.append(r)
+                out.append(f"{k}: {r['text']}")
+        r = jroll(rng, d["arrival"], picked)
+        out.append(f"arrival: {r['text']}")
+        risks = [p["risk"] for p in picked if p.get("risk") in RISKS]
+        risk = max(risks, key=RISKS.index) if risks else "unrated"
+        print(f"lead {i} (risk {risk}):")
+        for o in out:
+            print("  " + o)
+
+
+def journey_check(leads):
+    errs, warns = [], []
+    if len(leads) < 2:
+        warns.append(f"{len(leads)} lead(s); offer 2 or more so the party chooses")
+    rs = [l.get("risk") for l in leads]
+    for l in leads:
+        n = l.get("name") or "?"
+        if l.get("risk") not in RISKS:
+            warns.append(f"{n}: no risk label (low, mid, high) the players can weigh")
+        if not l.get("moral") and not l.get("reward"):
+            warns.append(f"{n}: neither a moral stake nor a reward; nothing to weigh")
+        if l.get("kind") == "complex":
+            m = l.get("mission") or {}
+            for k in MISSION:
+                if not m.get(k):
+                    (errs if k in ("objective", "location", "threat") else warns).append(f"{n}: mission has no {k}")
+        elif not l.get("constraint"):
+            warns.append(f"{n}: simple purpose with no travel constraint (deadline, fragile charge, quarry)")
+        arr = l.get("arrival") or []
+        arr = [arr] if isinstance(arr, str) else arr
+        if not arr or all(any(w in str(x).lower() for w in ("pay", "paid", "fee")) for x in arr):
+            warns.append(f"{n}: payment is the only arrival outcome; add a bonus, delay or a too-late result")
+    if len(leads) >= 2 and len(set(rs)) == 1 and rs[0] in RISKS:
+        warns.append(f"every lead is {rs[0]} risk; vary it so the choice means something")
+    report(errs, warns, f"{len(leads)} lead(s)")
+
+
+TRADE_BAND = "down20,down10,flat,up10,up20"  # ours, flatter than the source
+TRADE_WEIGHTS = "2,4,8,4,2"  # out of 20, a d20
+SECOND_BATCH = 0.8  # our cut for a batch sold into a filled market
+
+
+def band_pct(step):
+    step = step.strip().lower()
+    if step == "flat":
+        return 0
+    for pre, sign in (("down", -1), ("up", 1)):
+        if step.startswith(pre) and step[len(pre):].isdigit():
+            return sign * int(step[len(pre):])
+    die(f"band step {step!r}: use flat, upN or downN")
+
+
+def cmd_trade(a):
+    """Price of a regional haul: one compounding step per --step road hexes."""
+    import random
+    rng = random.Random(a.seed)
+    band = [band_pct(x) for x in a.band.split(",")]
+    try:
+        weights = [int(x) for x in a.weights.split(",")]
+    except ValueError:
+        die("--weights as numbers, e.g. 2,4,8,4,2")
+    if len(weights) != len(band) or sum(weights) < 1:
+        die("--weights needs one positive number per band step")
+    if a.price <= 0 or a.hexes < 0 or a.step < 1:
+        die("price above 0, hexes 0 or more, step 1 or more")
+    price = float(a.price)
+    if not a.regional:
+        print("warn: goods sold in many regions have nearer sources; no distance markup (add --regional for local goods)")
+    else:
+        for i in range(a.hexes // a.step):
+            pct = rng.choices(band, weights)[0]
+            price *= 1 + pct / 100
+            print(f"step {i + 1}: {pct:+d}% -> {price:.0f}")
+    if a.capacity is not None and (a.sold or 0) >= a.capacity:
+        price *= SECOND_BATCH
+        print(f"market filled ({a.sold} of {a.capacity}): next batch at {SECOND_BATCH:.0%}")
+    print(f"price: {price:.0f} (from {a.price:g} over {a.hexes} hexes)")
+
+
+CADENCE_SLACK = 1.2  # our 20% slack
+
+
+def cmd_cadence(a):
+    """Prep phases (name=hours) against the hours you have between sessions, with 20% slack."""
+    total = 0.0
+    for ph in a.phase:
+        n, _, h = ph.partition("=")
+        try:
+            total += float(h)
+        except ValueError:
+            die(f"phase as name=hours, got {ph!r}")
+    need = total * CADENCE_SLACK
+    print(f"phases {total:g} h, with 20% slack {need:g} h; you have {a.hours:g} h every {a.every_days} days")
+    if need <= a.hours:
+        print("ok: it fits")
+        return
+    days = math.ceil(need / (a.hours / a.every_days) - 1e-9)
+    print(f"error: does not fit; the shortest interval that fits at this rate is {days} days")
+    sys.exit(1)
+
+
+RIVAL_WATCH = ("healer", "caster", "terrain", "support", "friction", "none")
+RIVAL_TACTICS = ("separate", "lure", "deny", "deceive", "attack")
+
+
+def cmd_rival(a):
+    """A rival party racing the PCs: members, principles, tactics with tells, a dated timeline."""
+    d = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    errs, warns = [], []
+    ms, tl = d.get("members", []), d.get("timeline", [])
+    if len(ms) < 2:
+        errs.append(f"{len(ms)} member(s); a rival party wants 2 or more")
+    if not d.get("principles"):
+        errs.append("no principles (the rules the rivals act by)")
+    for m in ms:
+        n = m.get("name") or "?"
+        if m.get("watches") not in RIVAL_WATCH:
+            warns.append(f"{n}: no watches (" + "|".join(RIVAL_WATCH) + "): which PC strength they answer")
+        if not m.get("bond"):
+            warns.append(f"{n}: no bond to the others")
+    tac = d.get("tactics", [])
+    if tac and all(t.get("kind") == "attack" for t in tac):
+        warns.append("every tactic is attack; add separate, lure, deny or deceive")
+    for t in tac:
+        if not t.get("tell"):
+            warns.append(f"tactic {t.get('name', '?')}: no tell the players can read")
+    arr = d.get("arrival_day")
+    if arr is not None and not any(isinstance(e.get("day"), int) and e["day"] < arr for e in tl):
+        warns.append(f"no timeline entry before arrival_day {arr}; the rivals should leave traces first")
+    if not any(e.get("site") and e.get("state") for e in tl):
+        warns.append("no timeline entry changes a site's state")
+    if not d.get("foreshadow"):
+        warns.append("no foreshadow: where the party first sees them")
+    if a.day is not None:
+        state = {}
+        for e in sorted(tl, key=lambda e: e.get("day", 0)):
+            if e.get("day", 0) <= a.day:
+                print(f"day {e.get('day')}: {e.get('event', '')}")
+                if e.get("site"):
+                    state[e["site"]] = e.get("state", "")
+        for k, v in state.items():
+            print(f"{k}: {v}")
+    report(errs, warns, f"{len(ms)} rivals, {len(tl)} timeline entries")
+
+
+CASCADE_OFFERS = ("money", "info", "gear")
+
+
+def cmd_cascade(a):
+    """A disaster opening: rows of events with fates and next links, a timer, patrons with offers."""
+    d = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    rows = d.get("rows", [])
+    errs, warns = [], []
+    if not rows:
+        die("no rows")
+    ids = {e.get("id") for r in rows for e in r}
+    for i, r in enumerate(rows):
+        if len(r) < 2:
+            warns.append(f"row {i + 1}: {len(r)} event; give the party a choice of 2 or more")
+        for e in r:
+            if not e.get("fate"):
+                errs.append(f"{e.get('id', '?')}: no fate (what happens if nobody helps)")
+            for n in e.get("next", []):
+                if n not in ids:
+                    errs.append(f"{e.get('id', '?')}: next {n!r} is not an event")
+            if i and not any(e.get("id") in p.get("next", []) for r2 in rows for p in r2):
+                warns.append(f"{e.get('id', '?')}: nothing leads to it")
+    kinds = {p.get("offer") for p in d.get("patrons", []) if p.get("offer") in CASCADE_OFFERS}
+    if len(kinds) < 2:
+        warns.append(f"{len(kinds)} patron offer kind(s); want 2+ of " + ", ".join(CASCADE_OFFERS))
+    print(f"timer: {d.get('timer', 'd4 minutes')} per row")
+    report(errs, warns, f"{len(rows)} rows, {len(ids)} events")
+
+
+TALK_KINDS = {"trade": "something for something", "bribe": "a gift that buys the answer", "threat": "or else",
+              "love": "do it because you care for me", "guilt": "you owe it for what you did", "debt": "you owe me a favour",
+              "duty": "your role demands it", "identity": "someone like you would", "appearance": "think how it looks",
+              "approval": "others will think well of you", "etiquette": "custom requires it", "plea": "I beg you"}
+
+
+def cmd_talk(a):
+    """Petitions: who asks whom for what, the opening leverage, fallbacks and a bottom line."""
+    if a.list:
+        for k, v in TALK_KINDS.items():
+            print(f"{k}: {v}")
+        return
+    if not a.file:
+        die("talk FILE.json, or --list")
+    ts = load_list(a.file, "talks")
+    errs, warns = [], []
+    for t in ts:
+        n = f"{t.get('petitioner', '?')} -> {t.get('granter', '?')}"
+        for k in ("petitioner", "granter", "want"):
+            if not t.get(k):
+                errs.append(f"{n}: no {k}")
+        if t.get("opening") not in TALK_KINDS:
+            warns.append(f"{n}: opening {t.get('opening')!r} is not a leverage kind (talk --list)")
+        fb = t.get("fallback") or []
+        if str(t.get("resist", "yes")).lower() == "no":
+            if fb:
+                warns.append(f"{n}: resist: no with fallbacks; make it a quick answer")
+        else:
+            if len(fb) < 2:
+                warns.append(f"{n}: {len(fb)} fallback(s); want 2 or more")
+            if not t.get("bottom_line"):
+                warns.append(f"{n}: no bottom_line (what the granter will never give)")
+    report(errs, warns, f"{len(ts)} petition(s)")
+
+
+ISLAND_BANDS = ("start", "middle", "end")
+
+
+def cmd_islands(a):
+    """Floating prep: islands placed where the players go. 'islands move FILE NAME --to PLACE' re-places one."""
+    if a.args[0] == "move":
+        if len(a.args) != 3 or not a.to:
+            die("islands move FILE NAME --to PLACE")
+        p = Path(a.args[1])
+        d = json.loads(p.read_text(encoding="utf-8"))
+        isl = d["islands"] if isinstance(d, dict) else d
+        x = next((i for i in isl if i.get("name", "").lower() == a.args[2].lower()), None)
+        if not x:
+            die(f"no island named {a.args[2]}")
+        old = x.get("at")
+        x["at"] = a.to
+        x.setdefault("moved", []).append(old)
+        p.write_text(json.dumps(d, indent=2), encoding="utf-8", newline="\n")
+        print(f"{x['name']}: {old or 'unplaced'} -> {a.to}")
+        return
+    isl = load_list(a.args[0], "islands")
+    warns = []
+    for b in ISLAND_BANDS:
+        if not any(i.get("band") == b for i in isl):
+            warns.append(f"no island in band {b}" + ("; the players need a goal to reach" if b == "end" else ""))
+    for i in isl:
+        n = i.get("name", "?")
+        if len(i.get("entries") or []) < 2:
+            warns.append(f"{n}: {len(i.get('entries') or [])} entry; give 2 or more ways to reach it")
+        if i.get("kind") == "fight" and i.get("at") and str(i["at"]).lower() in n.lower():
+            warns.append(f"{n}: fight named for its place; name it for what happens so it can move")
+    report([], warns, f"{len(isl)} islands")
 
 
 def cmd_portal(a):
@@ -3645,6 +4238,8 @@ def main(argv=None):
             s.add_argument("--throng", action="append", help="COUNTxFOE: COUNT weak foes fought as one crowd of level or CR FOE")
             s.add_argument("--solo", action="store_true", help="one foe against the party; wants --tactics, --fallback, --terrain")
             s.add_argument("--tactics"); s.add_argument("--fallback"); s.add_argument("--terrain")
+            s.add_argument("--spike", type=int, action="append", help="one foe's max burst damage in a turn; repeat per foe")
+            s.add_argument("--pc-hp", type=int, help="the lowest PC's full HP, for --spike")
         else:
             s.add_argument("--threat", default="moderate")
         s.add_argument("--json", action="store_true")
@@ -3652,6 +4247,9 @@ def main(argv=None):
     t = sub.add_parser("tracker", help="initiative and HP tracker")
     t.add_argument("action", choices=["init", "add", "hit", "heal", "next", "late", "cond", "effect", "clock", "poison", "countdown", "show"])
     t.add_argument("--owner", help="countdown: the combatant whose turn turns the die down")
+    t.add_argument("--save-each", action="store_true", help="poison: a save every round, not only at a stage change")
+    t.add_argument("--dc", type=int, help="poison: save DC shown with each save")
+    t.add_argument("--potency", choices=["up", "down"], help="poison: a stronger or weaker dose, DC +/-2")
     t.add_argument("--unit", choices=["turn", "round"], default="round", help="clock: ticks on each next or at the round wrap")
     t.add_argument("--fail", action="store_true", help="clock tick: a failure ticks one extra")
     t.add_argument("--timer", type=int, help="init: seconds per player turn; 'late' delays whoever runs out")
@@ -3669,6 +4267,11 @@ def main(argv=None):
     s.add_argument("--hours", type=float, help="session length; warns on more fights than fit (1 an hour, a 4e-grid number)")
     s.add_argument("--learning", action="store_true", help="new players: 0.75 fights an hour")
     s.add_argument("--first", action="store_true", help="first session: needs ## Prologue, ## Intros and bond: lines")
+    s.add_argument("--weak", help="fields you tend to skip (description,dialog,weather,time,tactics,rules,names)")
+    s.add_argument("--strong", help="fields you overwrite; warns past 40 words")
+    s.add_argument("--review", action="store_true", help="proofreader, director and playtester passes over ## Scenes")
+    s.add_argument("--short", action="store_true", help="with --review: print the drop order")
+    s.add_argument("--party", action="append", help="with --review: a character JSON to check for bypass powers")
     s.set_defaults(fn=cmd_prep)
     s = sub.add_parser("combat-log", help="turn times of a real fight from a CSV log")
     s.add_argument("log"); s.add_argument("--budget", type=float, default=90); s.add_argument("--gm", default="GM")
@@ -3681,7 +4284,8 @@ def main(argv=None):
     s = sub.add_parser("session-log", help="print a session log template that feeds the next prep card")
     s.add_argument("--session", type=int, default=1); s.set_defaults(fn=cmd_sessionlog)
     s = sub.add_parser("npcs", help="check three-line NPC cards")
-    s.add_argument("card"); s.set_defaults(fn=cmd_npcs)
+    s.add_argument("card"); s.add_argument("--but", action="store_true", help="warn on NPCs with no contradiction")
+    s.set_defaults(fn=cmd_npcs)
     s = sub.add_parser("world", help="check a setting card's traits")
     s.add_argument("card"); s.set_defaults(fn=cmd_world)
     s = sub.add_parser("fiveroom", help="check an adventure plan against the five-role arc")
@@ -3770,7 +4374,38 @@ def main(argv=None):
     s.add_argument("--track-age", type=int, help="days old the trail is; prints the tracking target")
     s.add_argument("--rain", action="store_true"); s.add_argument("--group", type=int, default=1, help="size of the tracked group")
     s.add_argument("--seed", type=int)
+    s.add_argument("--oddity", help="JSON of colour events; draws one per journey, no repeats unless tagged repeat")
     s.set_defaults(fn=cmd_travel)
+    s = sub.add_parser("journey", help="roll journey leads from your tables, or --check a lead slate")
+    s.add_argument("file"); s.add_argument("--kind", choices=["simple", "complex"], default="simple")
+    s.add_argument("--leads", type=int, default=3); s.add_argument("--seed", type=int)
+    s.add_argument("--check", action="store_true", help="file is a lead slate to check")
+    s.set_defaults(fn=cmd_journey)
+    s = sub.add_parser("trade", help="price of a regional haul over road hexes")
+    s.add_argument("--price", type=float, required=True); s.add_argument("--hexes", type=int, required=True)
+    s.add_argument("--step", type=int, default=5); s.add_argument("--band", default=TRADE_BAND)
+    s.add_argument("--weights", default=TRADE_WEIGHTS)
+    s.add_argument("--capacity", type=int); s.add_argument("--sold", type=int)
+    s.add_argument("--regional", action="store_true", help="goods found only in the source region")
+    s.add_argument("--seed", type=int)
+    s.set_defaults(fn=cmd_trade)
+    s = sub.add_parser("cadence", help="do your prep phases fit between sessions (20% slack)")
+    s.add_argument("--every-days", type=int, required=True); s.add_argument("--hours", type=float, required=True)
+    s.add_argument("--phase", nargs="+", required=True, help="name=hours, e.g. brainstorm=1 select=0.5")
+    s.set_defaults(fn=cmd_cadence)
+    s = sub.add_parser("rival", help="check a rival party: members, principles, tactics, timeline")
+    s.add_argument("file"); s.add_argument("--day", type=int, help="print events and site states up to this day")
+    s.set_defaults(fn=cmd_rival)
+    s = sub.add_parser("cascade", help="check a disaster opening: rows of events, fates, patrons")
+    s.add_argument("file"); s.set_defaults(fn=cmd_cascade)
+    s = sub.add_parser("talk", help="check petitions: leverage, fallbacks, bottom line")
+    s.add_argument("file", nargs="?"); s.add_argument("--list", action="store_true", help="print the leverage kinds")
+    s.set_defaults(fn=cmd_talk)
+    s = sub.add_parser("islands", help="check floating prep islands, or move one")
+    s.add_argument("args", nargs="+", help="FILE, or move FILE NAME"); s.add_argument("--to")
+    s.set_defaults(fn=cmd_islands)
+    s = sub.add_parser("handouts", help="check handouts: purpose, in-world sender, a recap after a gap")
+    s.add_argument("file"); s.set_defaults(fn=cmd_handouts)
     s = sub.add_parser("calendar", help="world-day ledger for split groups")
     s.add_argument("file"); s.add_argument("--drift", type=int, default=3, help="warn when groups are this many days apart")
     s.set_defaults(fn=cmd_calendar)
