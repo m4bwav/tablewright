@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.25.0 (2026-11-26)
+- `xp --award-once`: each encounter's XP is paid once (foes share an `encounter` id), tagged by `how` (kill, sneak, trick, parley). `xp --per-rescue X` adds X per `rescues`. Ideas inspired by Depths of Felk Mor, p. 7, and Throne of God, p. 63.
+- `rooms --routes`: every entry-to-goal path with its XP and biggest fight; a room's `alarm_to` foes joining another fight warn. `rooms --hooks`: a hook gated by a check needs `later`. Ideas inspired by A Lesson in Scripture, p. 4.
+- `rooms --schedule` (activity weights, surprise per result, lethal windows at 1 in 3 or more warn) and `rooms --muffle` (which rooms hear a `noise` room; `muffled` rooms damp it). `wander --from-rooms`: patrol foes leave their room for the wandering table. `adventure --pillars`: scenes per combat, social, explore pillar. `encounter --buff-source OBJ`: the band with and without a breakable object giving foes advantage (x1.5, our number). Ideas inspired by Lost Temple of Forgotten Evil, pp. 4, 24-29.
+- `rooms --teleport`: every teleport result must still reach an exit; a node with no `bypass` warns. `boons [--once-per-pc]`: a once-per-character boon taken twice fails; boon XP jumping 2+ levels warns. Ideas inspired by Depths of Felk Mor, pp. 110-111, and Darker Gifts, p. 3.
+- `tt.py ritual --level N [--untrained] [--interrupted]`: whether a ritual attempt rolls for misfortune and its severity, our own ladder. `doomtrack --renewal PERIOD --streak K`: recast schedule, save per recast, permanent after K. Ideas inspired by Occult Ritual Magic, pp. 2-3.
+- `doomtrack --stages birth:7,growth:90,formed --acts N --accelerant D` and `chase --collapse FEET`: a staged corruption clock and an outrun-the-edge check. Ideas inspired by Echoes of Heaven, p. 150.
+- `encounter --scale 3:0,6:1,8:2`, `encounter --wave ... --trigger bloodied` (warns when the mission is not a fight), `tt.py treasure-gap --level L --party-gold G` (par wealth 100 x level squared, our curve), `objective --hold-rounds N [--wipe-counts]`. Ideas inspired by Throne of God, pp. 19, 21, 31, 52.
+- `trap --reset`: a trap that `guards` a puzzle needs `reset` and `retry`. Idea inspired by A Lesson in Scripture, p. 4. `site --recorrupt DAYS --minus-per-live N --live V`: revert day per living villain. Idea inspired by Something Wicked, p. 23.
+- All numbers are ours; no book text or tables copied. 9 new tests (231 total).
+
 ## 0.24.0 (2026-11-26)
 - `rooms --keys` gates: room `requires: [a, b]` (multi-key hub gate), dict locks with `clue_in: ROOM` (warns when the clue is not reachable before the lock), `locked_until: EVENT` (warns on an event no room raises, and on `locked: true` with neither key nor event). `rooms --pieces`: `piece_of` items must lie before their puzzle room. Ideas inspired by Dungeons on Demand / EN5IDER: Out for Blood, pp. 5, 18; Silver Linings, pp. 5, 19; If Looks Could Kill, pp. 12, 14, 19; Time & Time Again, p. 11.
 - `tt.py objective FILE --gate FLAG:N --kill-list a,b,c`: boss after N flags (unreachable flag rooms warn), any-order kill list revealed on the last kill. Same sources.
