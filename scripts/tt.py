@@ -13,6 +13,10 @@ Commands:
   npcs        check three-line NPC cards (look; doing now; hook because why)
   world       check a setting card (6 to 8 traits, each anchored)
   fiveroom    check an adventure plan against the five-role arc
+  table       check a roll table CSV; 'table combine A B' rolls tables together
+  item        check magic items (drawback, cost axis, uses, friction)
+  mystery     check a mystery's clues per conclusion and its suspects
+  safety      check a table safety plan (cut and brake calls, debrief, confirmations)
   licence     notices for the bundled rules tables
 
 Exit 2 is a usage or validation error.
@@ -754,31 +758,141 @@ TIERS = ["minor", "moderate", "major", "legendary", "campaign"]
 YES = ("yes", "y", "true", "1")
 
 
+ITEM_NEW = ("cost_axis", "uses", "unpredictable", "bypasses", "friction")
+COST_AXES = ["coin", "body", "mind", "time", "social", "risk", "none"]
+USES = ["at-will", "per-day", "charges", "once"]
+
+
+def cmd_mystery(a):
+    """Mystery JSON: each conclusion has 3 clues a party can find, 3+ suspects, an opening not aimed at the culprit."""
+    m = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    errs, warns = [], []
+    lvl = m.get("party_level", 1)
+    dc = 10 + lvl // 2
+    clues, sus = m.get("clues", []), m.get("suspects", [])
+    concl = m.get("conclusions", [])
+    if not concl:
+        die("no conclusions")
+    for c in concl:
+        cid = c.get("id", "?")
+        cs = [x for x in clues if x.get("points_to") == cid]
+        if len(cs) < 2:
+            errs.append(f"conclusion {cid}: {len(cs)} clue(s); one missed roll stalls the case, want 3")
+        elif len(cs) == 2:
+            warns.append(f"conclusion {cid}: 2 clues; 3 is the safe count")
+        if cs and all(isinstance(x.get("dc"), (int, float)) and x["dc"] > dc + 5 for x in cs):
+            errs.append(f"conclusion {cid}: every clue needs a DC over {dc + 5} (typical {dc} at level {lvl})")
+    if len(sus) < 3:
+        warns.append(f"{len(sus)} suspects; 3+ keeps the answer from being obvious")
+    culprits = {s.get("name") for s in sus if s.get("culprit")}
+    finals = {c.get("id") for c in concl if c.get("final")}
+    targets = culprits | finals
+    first = min((x.get("scene", 1) for x in clues), default=1)
+    opening = [x for x in clues if x.get("scene", 1) == first]
+    if opening and targets and all(x.get("points_to") in targets for x in opening):
+        warns.append(f"every scene {first} clue points at the culprit; the case ends in the first scene")
+    report(errs, warns, f"{len(concl)} conclusions, {len(clues)} clues, {len(sus)} suspects")
+
+
+def cmd_safety(a):
+    """Safety plan JSON: a cut call, a brake call, a debrief, warnings for lines and veils, every player confirmed."""
+    s = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    errs, warns = [], []
+    if not s.get("cut_call"):
+        errs.append("no cut_call: the word that stops a scene at once")
+    if not s.get("brake_call"):
+        warns.append("no brake_call: the word that slows a scene down")
+    dm = s.get("debrief_minutes")
+    if not isinstance(dm, (int, float)) or dm < 10:
+        warns.append(f"debrief_minutes {dm}; plan 10 or more to talk after play")
+    if (s.get("lines") or s.get("veils")) and not s.get("content_warnings"):
+        warns.append("lines or veils set but no content_warnings for the players before play")
+    conf = set(s.get("players_confirmed", []))
+    if a.party:
+        pcs = json.loads(Path(a.party).read_text(encoding="utf-8")).get("pcs", [])
+        for p in pcs:
+            who = p.get("player") or p.get("name")
+            if who not in conf:
+                errs.append(f"{who} has not confirmed the safety plan")
+    report(errs, warns, f"cut call set, {len(conf)} player(s) confirmed")
+
+
 def roll_range(r):
     lo, _, hi = r["roll"].strip().partition("-")
     return int(lo), int(hi or lo)
 
 
-def cmd_table(a):
-    """Check a random encounter table CSV (roll,kind,difficulty,avoidable): gaps, fight share, unavoidable easy fights."""
-    with open(a.table, encoding="utf-8", newline="") as f:
+def read_table(path):
+    """Rows of a roll table CSV plus the covered rolls and gap/overlap errors."""
+    with open(path, encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f))
-    errs, warns, covered, fights = [], [], set(), 0
+    errs, covered = [], set()
     for r in rows:
-        lo, hi = roll_range(r)
+        try:
+            lo, hi = roll_range(r)
+        except (KeyError, ValueError, AttributeError):
+            die(f"{path}: bad roll {r.get('roll')!r} (use 3 or 1-4)")
         span = set(range(lo, hi + 1))
         if covered & span:
             errs.append(f"roll {r['roll']} overlaps another row")
         covered |= span
+    top = max(covered) if covered else 0
+    gaps = sorted(set(range(1, top + 1)) - covered)
+    if gaps:
+        errs.append(f"rolls with no row: {gaps[:10]}{' ...' if len(gaps) > 10 else ''}")
+    return rows, covered, errs
+
+
+def cmd_combine(a):
+    """Roll 2 to 4 tables together: K distinct combinations, seeded."""
+    import itertools, random
+    if not 2 <= len(a.tables) <= 4:
+        die("combine takes 2 to 4 tables")
+    tabs = []
+    for t in a.tables:
+        rows, _, errs = read_table(t)
+        if errs:
+            die(f"{t}: " + "; ".join(errs))
+        if len(rows) < 6:
+            die(f"{t}: {len(rows)} rows, want at least 6 so combinations stay varied")
+        tabs.append(rows)
+    label = lambda r: " / ".join(v.strip() for k, v in r.items() if k != "roll" and v and v.strip()) or r["roll"]
+    total = 1
+    for rows in tabs:
+        total *= len(rows)
+    rng = random.Random(a.seed)
+    if a.count <= total:
+        picks = []
+        for i in rng.sample(range(total), a.count):
+            idx = []
+            for rows in reversed(tabs):
+                i, j = divmod(i, len(rows))
+                idx.append(j)
+            picks.append(tuple(reversed(idx)))
+    else:
+        print(f"note: {a.count} asked, only {total} distinct combinations; repeats follow")
+        picks = [tuple(rng.randrange(len(rows)) for rows in tabs) for _ in range(a.count)]
+    for n, p in enumerate(picks, 1):
+        print(f"{n}. " + " + ".join(label(tabs[t][j]) for t, j in enumerate(p)))
+
+
+def cmd_table(a):
+    """Check a random encounter table CSV (roll,kind,difficulty,avoidable): gaps, fight share, unavoidable easy fights."""
+    if a.table == "combine":
+        return cmd_combine(a)
+    if a.tables:
+        die("table takes one file (or: table combine A.csv B.csv ...)")
+    rows, covered, errs = read_table(a.table)
+    warns, fights = [], 0
+    for r in rows:
+        lo, hi = roll_range(r)
+        span = set(range(lo, hi + 1))
         kind = r["kind"].strip().lower()
         if kind == "fight":
             fights += len(span)
             if r.get("difficulty", "").strip().lower() in ("trivial", "easy", "low") and r.get("avoidable", "").strip().lower() not in YES:
                 warns.append(f"roll {r['roll']}: easy fight the party cannot avoid (a speed bump; make it avoidable)")
     top = max(covered) if covered else 0
-    gaps = sorted(set(range(1, top + 1)) - covered)
-    if gaps:
-        errs.append(f"rolls with no row: {gaps[:10]}{' ...' if len(gaps) > 10 else ''}")
     share = fights / top if top else 0
     if share > a.max_fight:
         warns.append(f"fights fill {share:.0%} of the table, over {a.max_fight:.0%}; travel should be mostly other things")
@@ -807,6 +921,18 @@ def cmd_item(a):
             errs.append(f"{n}: {d} drawback under a {b} boon; random items inflate power")
         elif d == "campaign":
             warns.append(f"{n}: drawback changes the campaign; confirm you will run it and the players agree")
+        if any(k in it for k in ITEM_NEW):
+            cost = it.get("cost_axis")
+            if cost is not None and cost not in COST_AXES:
+                errs.append(f"{n}: cost_axis must be one of {COST_AXES}")
+            elif cost in (None, "none") and b in TIERS and b != TIERS[0]:
+                errs.append(f"{n}: {b} item with no cost_axis; magic above the lowest tier should cost coin, body, mind, time, standing or risk")
+            if it.get("uses") is not None and it["uses"] not in USES:
+                errs.append(f"{n}: uses must be one of {USES}")
+            if it.get("unpredictable") and it.get("uses") == "at-will":
+                warns.append(f"{n}: unpredictable at will; players will spam it until it fires right, limit the uses")
+            if it.get("bypasses") and not it.get("friction"):
+                errs.append(f"{n}: bypasses {', '.join(it['bypasses'])} with no friction; it erases that part of the game")
     for w in warns:
         print("warn: " + w)
     for e in errs:
@@ -858,7 +984,16 @@ def main(argv=None):
     s = sub.add_parser("fiveroom", help="check an adventure plan against the five-role arc")
     s.add_argument("plan"); s.set_defaults(fn=cmd_fiveroom)
     s = sub.add_parser("table", help="check a random encounter table CSV")
-    s.add_argument("table"); s.add_argument("--max-fight", type=float, default=0.35); s.set_defaults(fn=cmd_table)
+    s.add_argument("table", help="CSV, or 'combine' then 2 to 4 CSVs")
+    s.add_argument("tables", nargs="*")
+    s.add_argument("--max-fight", type=float, default=0.35)
+    s.add_argument("--seed", type=int); s.add_argument("--count", type=int, default=6)
+    s.set_defaults(fn=cmd_table)
+    s = sub.add_parser("mystery", help="check a mystery's clues and suspects")
+    s.add_argument("file"); s.set_defaults(fn=cmd_mystery)
+    s = sub.add_parser("safety", help="check a table safety plan")
+    s.add_argument("file"); s.add_argument("--party", help="party.json; every PC's player must confirm")
+    s.set_defaults(fn=cmd_safety)
     s = sub.add_parser("item", help="check magic items pair each boon with a drawback")
     s.add_argument("items"); s.set_defaults(fn=cmd_item)
     s = sub.add_parser("villain", help="check villain cards")
@@ -882,7 +1017,7 @@ def main(argv=None):
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
-    if getattr(a, "party", 1) < 1:
+    if isinstance(getattr(a, "party", None), int) and a.party < 1:
         die("party must be at least 1")
     a.fn(a)
 

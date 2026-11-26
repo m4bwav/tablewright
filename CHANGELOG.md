@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0 (2026-11-26)
+- `tt.py mystery`: each conclusion needs 2 clues (3 is safe) a typical party can find, 3+ suspects, and an opening scene that does not point only at the culprit. Idea from the Kobold Guide to Game Design (p. 158-162).
+- `tt.py safety`: a cut call, a brake call, a debrief of 10+ minutes, content warnings for lines and veils, and every player confirmed (`--party`). Idea from Beyond Role and Play (the Hamlet safety report, Wieslander).
+- `item`: optional `cost_axis`, `uses`, `unpredictable`, `bypasses` and `friction`; old files still pass. Idea from the Kobold Guide to Magic (p. 29-36, 59-60, 83-88).
+- `tt.py table combine`: roll 2 to 4 checked tables of 6+ rows together, seeded, no repeats while the tables allow. Idea from the AEG Ultimate Toolbox (p. 353).
+- 5 new tests; wording and thresholds are ours and unverified.
+
 ## 0.6.0 (2026-11-26)
 - `tt.py hooks`: city hook decks (shape, district and stakes tags; two choices per plot hook; followups for framed, accused, mistaken and ambush hooks; rumours keep a separate truth; shape and colour mix). Ideas from Johnn Four, 650 City Encounters (p. 2-45) and Goodman Games, GM Gems (p. 8-9).
 - `tt.py tavern`: tavern and inn cards by role (map dot, plot point, encounter, adventure), a house special, a map that fits the expected play, two-sided conflicts, hooks that say where to go, stock encounter variety and a hook per PC. Idea from the RoleplayingTips Inns, Taverns, Restaurants Design Guide (p. 13-52, 139-140).

@@ -259,3 +259,42 @@ def test_party():
     r = run("party", FX / "party.json")
     assert r.returncode == 1 and "Bo: tie to Zed" in r.stdout and "Bo: no plot_tie" in r.stdout
     assert "the mayor" in r.stdout and "the map is fake" not in r.stdout
+
+
+def test_mystery_ok():
+    r = run("mystery", FX / "mystery_ok.json")
+    assert r.returncode == 0 and "warn" not in r.stdout
+
+
+def test_mystery_flags_gaps():
+    r = run("mystery", FX / "mystery_bad.json")
+    assert r.returncode == 1 and "tunnel: 1 clue" in r.stdout and "vault: every clue needs a DC over 16" in r.stdout
+    assert "clerk: 2 clues" in r.stdout and "2 suspects" in r.stdout and "scene 1 clue points at the culprit" in r.stdout
+
+
+def test_safety():
+    assert run("safety", FX / "safety_ok.json", "--party", FX / "party.json").returncode == 0
+    r = run("safety", FX / "safety_bad.json", "--party", FX / "party.json")
+    assert r.returncode == 1 and "no cut_call" in r.stdout and "Bo has not confirmed" in r.stdout
+    assert "no brake_call" in r.stdout and "debrief_minutes 5" in r.stdout and "content_warnings" in r.stdout
+    assert "Ana has not" not in r.stdout
+
+
+def test_item_cost_uses_friction():
+    r = run("item", FX / "items_cost.json")
+    assert r.returncode == 1 and "Gale Boots: moderate item with no cost_axis" in r.stdout
+    assert "warn: Wild Die: unpredictable" in r.stdout and "Far Mirror: bypasses scouting" in r.stdout
+    assert "Sending Shell" not in r.stdout
+    assert "cost_axis" not in run("item", FX / "items.json").stdout
+
+
+def test_table_combine():
+    a, b = FX / "combine_a.csv", FX / "combine_b.csv"
+    r = run("table", "combine", a, b, "--seed", "3", "--count", "36")
+    lines = [l for l in r.stdout.splitlines() if l[0].isdigit()]
+    assert r.returncode == 0 and len(lines) == 36 and len({l.split(". ", 1)[1] for l in lines}) == 36
+    assert r.stdout == run("table", "combine", a, b, "--seed", "3", "--count", "36").stdout
+    r = run("table", "combine", a, b, "--seed", "1", "--count", "40")
+    assert r.returncode == 0 and "repeats" in r.stdout
+    assert run("table", "combine", a, FX / "table_ok.csv").returncode == 2
+    assert run("table", "combine", a, FX / "table_bad.csv").returncode == 2
