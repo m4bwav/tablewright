@@ -907,6 +907,9 @@ def cmd_prep(a):
     for l in false:
         if "ends:" not in l.lower():
             warns.append(f"false lead with no ending (add 'ends: how players learn it is a dead end'): {l}")
+    prep_rotation_purpose(fights, a, errs, warns)
+    if a.end:
+        prep_climax_time(a.end, a.climax_min)
     for w in warns:
         print("warn: " + w)
     for e in errs:
@@ -914,6 +917,41 @@ def cmd_prep(a):
     if errs:
         sys.exit(1)
     print(f"ok: opening, {len(leads)} leads, {len(npcs)} NPCs with goals")
+
+
+PURPOSES = ("show-villain", "warning", "obstacle", "reward", "pace", "story")
+
+
+def prep_rotation_purpose(fights, a, errs, warns):
+    """--rotation: no two fights of one type: in a row, at most 4 a session. --purpose: every fight names a
+    purpose:; show-villain needs escape:, warning needs clues:."""
+    if a.rotation:
+        types = [tag(f, "type") for f in fights]
+        for i in range(1, len(types)):
+            if types[i] and types[i] == types[i - 1]:
+                warns.append(f"fights {i} and {i + 1} are both {types[i]}; alternate the kind of encounter")
+        if len(fights) > 4:
+            warns.append(f"{len(fights)} fights in one session; 4 is the most that stays fresh (our number)")
+    if a.purpose:
+        for f in fights:
+            pu = tag(f, "purpose")
+            if not pu:
+                errs.append(f"fight with no purpose: ({', '.join(PURPOSES)}): {f}")
+            elif pu not in PURPOSES:
+                warns.append(f"purpose: {pu}, use {', '.join(PURPOSES)}")
+            elif pu == "show-villain" and not tag(f, "escape"):
+                errs.append(f"purpose show-villain with no escape: (how the villain leaves alive): {f}")
+            elif pu == "warning" and not tag(f, "clues"):
+                warns.append(f"purpose warning with no clues: (what the party learns from it): {f}")
+
+
+def prep_climax_time(end, minutes):
+    """--end HH:MM --climax-min N: the latest clock time the final scene can start."""
+    hh, _, mm = end.partition(":")
+    if not (hh.isdigit() and mm.isdigit() and len(mm) == 2 and int(hh) < 24 and int(mm) < 60):
+        die("--end wants HH:MM")
+    t = (int(hh) * 60 + int(mm) - minutes) % 1440
+    print(f"start the climax by {t // 60:02d}:{t % 60:02d} to end at {end} ({minutes} min)")
 
 
 SCENE_KEYS = ("purpose", "closing", "type", "victory", "failure", "rules", "description", "dialog", "weather", "time",
@@ -1358,6 +1396,18 @@ def cmd_villain(a):
             warns.append(f"{name}: met in one place only; give two or more (where: a, b) so a missed scene is not a lost villain")
     if not sec:
         die("no '## Name' villain sections")
+    if a.escapes:
+        seen = {}
+        for name, lines in sec.items():
+            for l in lines:
+                b = l[2:].strip() if l[:2] in ("- ", "* ") else ""
+                if b.lower().startswith("escape:"):
+                    for e in b.split(":", 1)[1].split("|"):
+                        k = e.strip().lower().split(" ")[0]
+                        if k and k in seen:
+                            warns.append(f"{name}: escape {e.strip()!r} repeats {seen[k]}'s; players see it coming, vary it")
+                        elif k:
+                            seen[k] = name
     report(errs, warns, f"{len(sec)} villains")
 
 
@@ -1668,6 +1718,13 @@ def cmd_mystery(a):
                 warns.append(f"schedule {n}: at {at} comes before the previous entry ({last}); keep times ascending")
             last = at
         seen.add(n)
+    if a.every_suspect:
+        for su in sus:
+            n = su.get("name", "?")
+            if not su.get("could_have"):
+                warns.append(f"suspect {n}: no could_have (how they could have done it)")
+            if not any(n in (x.get("points_to"), x.get("suspect")) for x in clues):
+                warns.append(f"suspect {n}: no clue points at them; a suspect with no clue is not a suspect")
     report(errs, warns, f"{len(concl)} conclusions, {len(clues)} clues, {len(sus)} suspects")
 
 
@@ -2067,6 +2124,8 @@ def cmd_wander(a):
     import random
     if a.from_rooms:
         return wander_from_rooms(a.from_rooms)
+    if a.split:
+        return wander_split(a.split)
     if a.chance < 1 or a.every <= 0:
         die("--chance and --every must be positive")
     warns = []
@@ -4982,6 +5041,10 @@ def rumor_quests(d):
 
 def cmd_rest(a):
     """Hourly d20 interruption: an event on TARGET or more; each quiet hour the target drops by STEP."""
+    if a.awake is not None:
+        return rest_awake(a.awake, a.allowance)
+    if a.interrupt is None:
+        die("give --interrupt or --awake")
     if not 1 <= a.interrupt <= 21 or a.step < 0 or a.hours < 1:
         die("--interrupt 1 to 21, --step 0 or more, --hours 1 or more")
     quiet, exp, target = 1.0, 0.0, a.interrupt
@@ -4997,6 +5060,25 @@ def cmd_rest(a):
         print(f"expected first event at hour {exp / hit:.1f} (when one comes); {hit:.1%} chance of an event in {a.hours} hours")
     else:
         print(f"no event can come in {a.hours} hours")
+
+
+def rest_awake(hours, allowance):
+    """Sleep-deprivation ladder (our numbers): past the allowance a Con save every 4 h, DC 10 rising 2 a save;
+    the first failure is just tired, each later one a level of exhaustion; from 8 h over, a doze check."""
+    if hours < 0 or allowance < 1:
+        die("--awake 0 or more, --allowance 1 or more")
+    over = hours - allowance
+    if over <= 0:
+        print(f"{hours:g} h awake of {allowance:g} allowed: no saves yet")
+        return
+    saves = int(over // 4)
+    print(f"{hours:g} h awake, {over:g} past the {allowance:g} h allowance: {saves} Con save(s)")
+    for i in range(saves):
+        print(f"  save {i + 1} at hour {allowance + 4 * (i + 1):g}: DC {10 + 2 * i}; a failure is "
+              + ("tired (disadvantage on Wisdom checks)" if i == 0 else "one level of exhaustion"))
+    if over >= 8:
+        print("  doze: when resting still or on watch, a Wis save DC 10 or fall asleep")
+    print("a long rest clears it; numbers are ours")
 
 
 def cmd_burst(a):
@@ -5392,6 +5474,7 @@ def alert_waves(a):
         print(f"arrived XP: {xp} (add it to the last fight)")
 
 
+# ---- 0.26.0 additions live next to the commands they extend (pacing, puzzle, prep, rest, wander).
 # ---- 0.25.0: routes, schedules, noise, teleports, hooks, boons, rituals and clocks (all numbers ours) ----
 
 ROUTE_CAP = 200  # stop listing paths past this many; our number
@@ -5695,6 +5778,8 @@ def cmd_adventure(a):
     errs, warns, req, opt = [], [], {}, {}
     for s in scenes:
         p = s.get("pillar")
+        if a.pacing and p is None:
+            continue
         if p not in ADVENTURE_PILLARS:
             errs.append(f"{s.get('name', '?')}: pillar {p!r}, use " + ", ".join(ADVENTURE_PILLARS))
             continue
@@ -5704,16 +5789,122 @@ def cmd_adventure(a):
         for p in ADVENTURE_PILLARS:
             print(f"{p}: {req.get(p, 0)} required, {opt.get(p, 0)} optional")
     tot = len(scenes)
-    for p in ("combat", "social"):
+    pillarless = a.pacing and not any(s.get("pillar") for s in scenes)
+    for p in () if pillarless else ("combat", "social"):
         if not req.get(p, 0) + opt.get(p, 0) + req.get("either", 0) + opt.get("either", 0):
             warns.append(f"no {p} scene; a player who likes {p} gets nothing")
     for p in ("combat", "social", "explore"):
         v = req.get(p, 0) + opt.get(p, 0)
         if tot >= 4 and v * 2 > tot:
             warns.append(f"{v} of {tot} scenes are {p}; mix in the other pillars")
-    if not opt:
+    if not opt and not a.pacing:
         warns.append("no optional scene; give the players a choice of what to skip")
+    if a.pacing:
+        adventure_pacing(scenes, a.pacing, errs, warns)
     report(errs, warns, f"{tot} scenes")
+
+
+def adventure_pacing(scenes, shape, errs, warns):
+    """Fight difficulties against a shape. pendulum: hard and easy swing back and forth; pit: an easy run,
+    one spike, then a plateau (a spike two bands over the run needs escape: true); vise: never easier, no rest."""
+    ds = [(s.get("name", "?"), DIFF_RANK[s["difficulty"]]) for s in scenes
+          if s.get("difficulty") in DIFF_RANK and not s.get("rest")]
+    rests = [s.get("name", "?") for s in scenes if s.get("rest")]
+    if len(ds) < 3:
+        errs.append(f"{len(ds)} rated scenes; --pacing wants 3+ with difficulty:")
+        return
+    r = [v for _, v in ds]
+    print(f"{shape}: " + " > ".join(f"{n} ({v})" for n, v in ds))
+    if shape == "pendulum":
+        if max(r) - min(r) < 2:
+            warns.append("pendulum swings less than two bands; make the hard fights hard and the easy ones easy")
+        for i in range(2, len(r)):
+            if (r[i] - r[i - 1]) * (r[i - 1] - r[i - 2]) > 0:
+                warns.append(f"{ds[i][0]}: third step the same way in a row; a pendulum should swing back")
+    elif shape == "pit":
+        top = r.index(max(r))
+        if top == 0:
+            warns.append("pit opens on its hardest fight; start with an easy run")
+        if any(v > r[0] + 1 for v in r[:top]):
+            warns.append("the run before the spike is not easy; keep it within a band of the opening fight")
+        if any(v < max(r) - 1 for v in r[top + 1:]):
+            warns.append("after the spike the fights drop back down; a pit keeps a plateau near the spike")
+        sp = next(s for s in scenes if s.get("name", "?") == ds[top][0])
+        if top and max(r) - min(r[:top]) >= 2 and not sp.get("escape"):
+            warns.append(f"{ds[top][0]}: spike two bands over the run with no escape: true; give a way out")
+    else:
+        for i in range(1, len(r)):
+            if r[i] < r[i - 1]:
+                warns.append(f"{ds[i][0]}: easier than {ds[i - 1][0]}; a vise only tightens")
+        if rests:
+            warns.append(f"vise with a rest ({', '.join(rests)}); the squeeze should not let up")
+
+
+WANDER_KINDS = ("nothing (near miss: a sound, a track)", "encounter", "event", "discovery")
+
+
+def wander_split(spec):
+    """--split 3/2/2/1: one die whose faces divide into nothing, encounter, event, discovery."""
+    try:
+        parts = [int(x) for x in spec.split("/")]
+    except ValueError:
+        parts = []
+    if len(parts) != 4 or min(parts) < 0 or sum(parts) < 2:
+        die("--split wants four counts like 3/2/2/1")
+    n, lo = sum(parts), 1
+    print(f"one d{n}:")
+    for k, c in zip(WANDER_KINDS, parts):
+        if c:
+            print(f"  {lo}{'-' + str(lo + c - 1) if c > 1 else ''}: {k} ({c / n:.0%})")
+        lo += c
+    if parts[1] * 2 > n:
+        print(f"warn: encounters are {parts[1] / n:.0%} of results; most checks become fights")
+
+
+PUZZLE_COST = {"minor": 0.1, "moderate": 0.3, "deadly": 0.6}  # share of max HP per wrong try, our numbers
+
+
+def cmd_puzzle(a):
+    """Puzzle rooms JSON {puzzles: [...]}: a deadly puzzle needs a warning; parts and the order clue are placed;
+    3+ hints, not all GM-voiced at the start; needed items are in --have; K wrong tries cannot kill a PC of
+    --hp; a critical-path puzzle opens a door or has fail_forward."""
+    pz = load_list(a.file, "puzzles")
+    have = {x.strip().lower() for x in (a.have or "").split(",") if x.strip()}
+    errs, warns = [], []
+    for q in pz:
+        n = q.get("name", "?")
+        if q.get("deadly") and not q.get("warning"):
+            errs.append(f"{n}: deadly with no warning: (a sign or safe test the party can find first)")
+        parts = q.get("parts") or []
+        for pt in parts:
+            if not pt.get("at"):
+                errs.append(f"{n}: part {pt.get('name', '?')} has no at: (where the party finds it)")
+        if parts and q.get("order_clue_at") is None:
+            warns.append(f"{n}: parts with no order_clue_at; how do players learn the order?")
+        elif q.get("order_clue_at") in {pt.get("at") for pt in parts}:
+            warns.append(f"{n}: the order clue sits with a part; place it apart so finding it is its own step")
+        hints = q.get("hints") or []
+        if len(hints) < 3:
+            warns.append(f"{n}: {len(hints)} hint(s); want 3 rising ones (all is here, most things matter, things combine)")
+        if len(hints) >= 2 and all(h.get("source", "gm") == "gm" for h in hints[:2]):
+            warns.append(f"{n}: first hints are the GM talking; let an NPC or the room give them first")
+        if a.stall_after and hints:
+            print(f"{n}: " + ", ".join(f"hint {i + 1} after {a.stall_after * (i + 1)} wrong tries" for i in range(len(hints))))
+        if have:
+            for it in q.get("needs") or []:
+                if it.lower() not in have:
+                    errs.append(f"{n}: needs {it} and the party cannot have it before this room")
+        cost, tries = q.get("wrong_cost"), q.get("tries")
+        if cost:
+            if cost not in PUZZLE_COST:
+                errs.append(f"{n}: wrong_cost {cost!r}, use " + ", ".join(PUZZLE_COST))
+            elif not tries:
+                warns.append(f"{n}: wrong tries cost {cost} with no tries: limit; flailing can kill")
+            elif a.hp and PUZZLE_COST[cost] * a.hp * tries >= a.hp:
+                errs.append(f"{n}: {tries} wrong tries at {cost} take {PUZZLE_COST[cost] * a.hp * tries:.0f} of {a.hp} HP")
+        if q.get("critical") and q.get("reward") != "door" and not q.get("fail_forward"):
+            warns.append(f"{n}: on the critical path with no door reward and no fail_forward; a stuck table stops here")
+    report(errs, warns, f"{len(pz)} puzzles")
 
 
 def wander_from_rooms(path):
@@ -5824,6 +6015,10 @@ def main(argv=None):
     s.add_argument("--review", action="store_true", help="proofreader, director and playtester passes over ## Scenes")
     s.add_argument("--short", action="store_true", help="with --review: print the drop order")
     s.add_argument("--party", action="append", help="with --review: a character JSON to check for bypass powers")
+    s.add_argument("--rotation", action="store_true", help="warn on two fights of one type: in a row and more than 4")
+    s.add_argument("--purpose", action="store_true", help="every fight needs purpose: (show-villain, warning, ...)")
+    s.add_argument("--end", help="HH:MM the session ends; prints when the climax must start")
+    s.add_argument("--climax-min", type=int, default=45, help="minutes the final scene needs")
     s.set_defaults(fn=cmd_prep)
     s = sub.add_parser("combat-log", help="turn times of a real fight from a CSV log")
     s.add_argument("log"); s.add_argument("--budget", type=float, default=90); s.add_argument("--gm", default="GM")
@@ -5852,14 +6047,17 @@ def main(argv=None):
     s.add_argument("--filter", action="append", help="combine: keep rows where column key=value (blank or any always match)")
     s.set_defaults(fn=cmd_table)
     s = sub.add_parser("mystery", help="check a mystery's clues and suspects")
-    s.add_argument("file"); s.set_defaults(fn=cmd_mystery)
+    s.add_argument("file"); s.add_argument("--every-suspect", action="store_true",
+                                           help="each suspect needs could_have and a clue pointing at them")
+    s.set_defaults(fn=cmd_mystery)
     s = sub.add_parser("safety", help="check a table safety plan")
     s.add_argument("file"); s.add_argument("--party", help="party.json; every PC's player must confirm")
     s.set_defaults(fn=cmd_safety)
     s = sub.add_parser("item", help="check magic items pair each boon with a drawback")
     s.add_argument("items"); s.set_defaults(fn=cmd_item)
     s = sub.add_parser("villain", help="check villain cards")
-    s.add_argument("card"); s.set_defaults(fn=cmd_villain)
+    s.add_argument("card"); s.add_argument("--escapes", action="store_true", help="warn when an escape method repeats")
+    s.set_defaults(fn=cmd_villain)
     s = sub.add_parser("twist", help="check a set of planned twists")
     s.add_argument("twists"); s.set_defaults(fn=cmd_twist)
     s = sub.add_parser("campaign", help="check a campaign plan")
@@ -5902,6 +6100,7 @@ def main(argv=None):
     s.add_argument("--surprise", type=int, default=3, help="each side is surprised on 1 in N")
     s.add_argument("--placed", action="append", help="area with a placed population")
     s.add_argument("--from-rooms", help="rooms JSON: foes with patrol: true become the table, out of their rooms")
+    s.add_argument("--split", help="N/N/N/N faces of one die: nothing, encounter, event, discovery")
     s.add_argument("--run", action="store_true"); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_wander)
     s = sub.add_parser("battle", help="a mass battle as three representative fights")
     s.add_argument("plan"); s.add_argument("--results", help="outcome of each fight in order: won,lost,drawn")
@@ -6186,7 +6385,9 @@ def main(argv=None):
     s = sub.add_parser("rumors", help="check a lead list, or {quests, rumors} with quest and true: yes|no|later each")
     s.add_argument("file"); s.set_defaults(fn=cmd_rumors)
     s = sub.add_parser("rest", help="hourly interruption odds for a rest whose target drops each quiet hour")
-    s.add_argument("--interrupt", type=int, required=True, help="d20 target for an event in hour 1")
+    s.add_argument("--interrupt", type=int, help="d20 target for an event in hour 1")
+    s.add_argument("--awake", type=float, help="hours without sleep: the sleep-deprivation ladder instead")
+    s.add_argument("--allowance", type=float, default=24, help="--awake: hours before saves start")
     s.add_argument("--step", type=int, default=1, help="target drops by this each quiet hour")
     s.add_argument("--hours", type=int, default=8); s.set_defaults(fn=cmd_rest)
     s = sub.add_parser("objective", help="boss gates over a rooms JSON: flag counts and an any-order kill list")
@@ -6217,8 +6418,14 @@ def main(argv=None):
     s = sub.add_parser("boons", help="check boons: once-per-PC repeats, boon XP that jumps levels")
     s.add_argument("file"); s.add_argument("--once-per-pc", action="store_true", help="treat every boon as once per PC")
     s.set_defaults(fn=cmd_boons)
+    s = sub.add_parser("puzzle", help="check puzzle rooms: warnings, hints, needed items, wrong-try cost")
+    s.add_argument("file"); s.add_argument("--have", help="a,b items the party can hold before the puzzles")
+    s.add_argument("--hp", type=int, help="a PC's max HP for the wrong-try check")
+    s.add_argument("--stall-after", type=int, help="wrong tries between hints")
+    s.set_defaults(fn=cmd_puzzle)
     s = sub.add_parser("adventure", help="check an adventure's scenes by pillar: combat, social, explore")
     s.add_argument("file"); s.add_argument("--pillars", action="store_true", help="print the count per pillar")
+    s.add_argument("--pacing", choices=("pendulum", "pit", "vise"), help="check scene difficulty: against a shape")
     s.set_defaults(fn=cmd_adventure)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))

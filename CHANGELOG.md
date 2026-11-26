@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.26.0 (2026-11-26)
+- `adventure --pacing pendulum|pit|vise`: fight difficulty in order against a shape (swinging, easy run then spike and plateau, only tightening with no rest); a pit spike two bands over the run needs `escape: true`. Idea inspired by the Ravenloft Dungeon Master's Guide.
+- `tt.py puzzle`: deadly puzzles need a warning, combination parts and the order clue are placed apart, 3+ hints not all GM-voiced at the start, `--have` covers needed items, `--hp` checks wrong tries cannot kill, critical-path puzzles open a door or fail forward; `--stall-after N` prints the hint schedule. Ideas inspired by Riddle Rooms 1 and 2 (Cloud Kingdom Games), pp. 2-5, 18, 29, 32-36.
+- `prep --rotation` (no two fights of one `type:` in a row, 4 a session at most), `--purpose` (every fight states one; a show-villain fight needs an escape, a warning fight its clues), `--end HH:MM --climax-min N`. Ideas inspired by DM Design Kit I, pp. 11, 22, and Robin's Laws of Good Game Mastering, p. 32.
+- `rest --awake HOURS [--allowance 24]`: a sleep-deprivation ladder. Idea inspired by the Ravenloft DMG, p. 33. `mystery --every-suspect` (each suspect has `could_have` and a clue; L5R GM's Survival Guide, p. 121), `villain --escapes` (a repeated escape method warns; same book, p. 80), `wander --split 3/2/2/1` (one die for nothing, encounter, event, discovery; DM Design Kit I, p. 13).
+- All numbers are ours; no book text or tables copied. 7 new tests.
+
 ## 0.25.0 (2026-11-26)
 - `xp --award-once`: each encounter's XP is paid once (foes share an `encounter` id), tagged by `how` (kill, sneak, trick, parley). `xp --per-rescue X` adds X per `rescues`. Ideas inspired by Depths of Felk Mor, p. 7, and Throne of God, p. 63.
 - `rooms --routes`: every entry-to-goal path with its XP and biggest fight; a room's `alarm_to` foes joining another fight warn. `rooms --hooks`: a hook gated by a check needs `later`. Ideas inspired by A Lesson in Scripture, p. 4.
