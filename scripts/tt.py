@@ -1094,6 +1094,180 @@ def cmd_item(a):
     print("ok: every boon has a matching drawback")
 
 
+# 0.9.0: table-running helpers. Bands, steps and odds are ours and configurable.
+
+def cmd_strength(a):
+    """Average party level (.5 rounds up) and a strength label from headcount and APL against the target."""
+    n = len(a.levels)
+    total = sum(a.levels)
+    apl = (2 * total + n) // (2 * n)
+    errs, warns = [], []
+    if n < 3 or n > 7:
+        errs.append(f"{n} players; a drop-in table runs 3 to 7")
+    size = (n > a.target_size) - (n < a.target_size)
+    lvl = (apl > a.target_level) - (apl < a.target_level)
+    label = {-2: "very weak", -1: "weak", 0: "average", 1: "strong", 2: "very strong"}[size + lvl]
+    print(f"APL {apl} ({total}/{n}); size {n} vs {a.target_size}, level {apl} vs {a.target_level}: {label}")
+    if label != "average":
+        warns.append("a coarse overlay; check the fight itself with tt.py encounter")
+    report(errs, warns, label)
+
+
+def cmd_loot(a):
+    """Loot JSON {gold, pcs: [{name, permanent}], items: [{name, kind, interested, agreed}]}: split and award."""
+    import random
+    d = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    pcs = d.get("pcs", [])
+    if not pcs:
+        die("loot needs pcs")
+    names = [p["name"] for p in pcs]
+    count = {p["name"]: int(p.get("permanent", 0)) for p in pcs}
+    rng = random.Random(a.seed)
+    share, rest = divmod(int(d.get("gold", 0)), len(pcs))
+    print(f"gold: {share} each to {len(pcs)}" + (f", {rest} left over for the party fund" if rest else ""))
+    errs = []
+    for it in d.get("items", []):
+        n = it.get("name", "?")
+        if it.get("kind", "permanent") != "permanent":
+            print(f"{n}: consumable, players divide it; a dispute goes to a roll")
+            continue
+        who, why = it.get("agreed"), "agreed"
+        if who and who not in names:
+            errs.append(f"{n}: agreed PC {who} is not in pcs")
+            continue
+        if not who:
+            want = [w for w in it.get("interested", []) if w in names]
+            if not want:
+                print(f"{n}: nobody wants it; sell it into the gold")
+                continue
+            low = min(count[w] for w in want)
+            tied = [w for w in want if count[w] == low]
+            who = tied[0] if len(tied) == 1 else rng.choice(tied)
+            why = f"fewest permanent items ({low})" + (f", won a roll among {len(tied)}" if len(tied) > 1 else "")
+        count[who] += 1
+        print(f"{n}: {who} ({why})")
+    report(errs, [], "loot split")
+
+
+REACTION_BANDS = [(3, "hostile"), (6, "wary"), (9, "neutral"), (11, "open"), (99, "helpful")]
+
+
+def reaction_band(total):
+    return next(b for top, b in REACTION_BANDS if total <= top)
+
+
+def cmd_reaction(a):
+    """First reaction of an improvised NPC: 2d6 plus modifiers, banded (our bands)."""
+    import random
+    rng = random.Random(a.seed)
+    roll = a.roll if a.roll is not None else rng.randint(1, 6) + rng.randint(1, 6)
+    mods = sum(a.mod or []) + {"friendly": 1, "neutral": 0, "hostile": -2}[a.approach]
+    total = roll + mods
+    print(f"roll {roll} {mods:+d} = {total}: {reaction_band(total)}")
+    print("use it for NPCs made on the spot; a written NPC reacts as written")
+
+
+HEAT_STEPS = [(2, "quiet"), (4, "noticed: rumours, a warning"), (6, "collector: a fine, a bribe or a favour owed"),
+              (8, "enforcers sent"), (10 ** 9, "open hunt")]
+
+
+def heat_step(h):
+    return next(s for top, s in HEAT_STEPS if h <= top)
+
+
+def cmd_heat(a):
+    """Faction ledger JSON: standing (-3..3) with reasons, heat that rises with crimes and witnesses."""
+    f = Path(a.file)
+    led = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    if a.action in ("crime", "standing") and not a.faction:
+        die(f"heat {a.action} needs a faction")
+    if a.action == "standing" and not a.why:
+        die("a standing change needs --why")
+    if a.action in ("crime", "standing"):
+        e = led.setdefault(a.faction, {"standing": 0, "heat": 0, "log": []})
+    if a.action == "crime":
+        before = heat_step(e["heat"])
+        e["heat"] += 1 + a.witnesses
+        e["log"].append(f"crime, {a.witnesses} witnesses: {a.why or 'no note'}")
+        if heat_step(e["heat"]) != before:
+            print(f"{a.faction} escalates: {heat_step(e['heat'])}")
+    elif a.action == "standing":
+        e["standing"] = max(-3, min(3, e["standing"] + a.by))
+        e["log"].append(f"standing {a.by:+d}: {a.why}")
+    elif a.action == "cool":
+        for e in led.values():
+            e["heat"] = max(0, e["heat"] - a.by)
+    if a.action != "show":
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(led, indent=2), encoding="utf-8")
+    for name, e in sorted(led.items(), key=lambda kv: -kv[1]["heat"]):
+        last = e["log"][-1] if e["log"] else "-"
+        print(f"{name}: standing {e['standing']:+d}, heat {e['heat']} ({heat_step(e['heat'])}); last: {last}")
+
+
+def cmd_premise(a):
+    """Premise card JSON: core and twist, a hook layer unlike the real one, per-type needs."""
+    d = json.loads(Path(a.card).read_text(encoding="utf-8"))
+    errs, warns = [], []
+    for k in ("type", "core", "twist"):
+        if not d.get(k):
+            errs.append(f"no {k}")
+    hook = d.get("hook")
+    if hook and hook.get("type") == d.get("type") and hook.get("root", "") == d.get("root", ""):
+        errs.append("hook layer is the same premise with the same root; change one")
+    t = d.get("type")
+    if t == "pursuit" and not d.get("finish_line"):
+        errs.append("pursuit needs a finish_line past which the quarry is lost")
+    if t == "race":
+        fs = d.get("factions", [])
+        if len(fs) < 2:
+            errs.append("race needs 2+ factions")
+        for fc in fs:
+            if not fc.get("agenda"):
+                errs.append(f"faction {fc.get('name', '?')} has no agenda")
+    if t == "investigation" and not d.get("at_risk"):
+        errs.append("investigation needs a witness or clue that can be lost (at_risk)")
+    if t == "defend" and not (d.get("faulty_intel") or d.get("choice")):
+        warns.append("defend: add faulty_intel or a choice beat")
+    if t == "object" and "incomplete" in str(d.get("twist", "")).lower():
+        warns.append("an object found incomplete frustrates players; pick another twist")
+    report(errs, warns, f"{t} premise")
+
+
+def cmd_wander(a):
+    """Random-encounter clock: checks per period, then distance, surprise, reaction or evasion. Numbers configurable."""
+    import random
+    if a.chance < 1 or a.every <= 0:
+        die("--chance and --every must be positive")
+    warns = []
+    checks = int(a.hours * 60 // a.every)
+    expected = checks / a.chance
+    print(f"{checks} checks at 1 in {a.chance}: about {expected:.1f} encounters in {a.hours:g} h")
+    if expected > a.budget:
+        warns.append(f"about {expected:.1f} encounters, over the budget of {a.budget:g}; check less often or lower the chance")
+    if a.placed:
+        warns.append(f"placed population in {', '.join(a.placed)}: use it there instead of rolling")
+    if a.run:
+        rng = random.Random(a.seed)
+        for i in range(1, checks + 1):
+            if rng.randint(1, a.chance) != 1:
+                continue
+            dist = (rng.randint(1, 6) + rng.randint(1, 6)) * a.feet
+            us = rng.randint(1, a.surprise) == 1
+            them = rng.randint(1, a.surprise) == 1
+            if us != them:
+                dist = max(a.feet, dist // 2)
+            r = rng.randint(1, 6) + rng.randint(1, 6)
+            line = f"check {i} (minute {i * a.every:g}): encounter at {dist} ft"
+            line += ", party surprised" if us else ""
+            line += ", foes surprised" if them else ""
+            line += f"; reaction {r}: {reaction_band(r)}"
+            if not us and dist > 3 * a.feet:
+                line += "; party can evade"
+            print(line)
+    report([], warns, "encounter clock")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1180,6 +1354,30 @@ def main(argv=None):
     s.set_defaults(fn=cmd_venues)
     s = sub.add_parser("party", help="check PC ties, plot ties and plan B for reveals")
     s.add_argument("file"); s.set_defaults(fn=cmd_party)
+    s = sub.add_parser("strength", help="average party level and party strength against the target")
+    s.add_argument("levels", type=int, nargs="+"); s.add_argument("--target-level", type=int, required=True)
+    s.add_argument("--target-size", type=int, default=5); s.set_defaults(fn=cmd_strength)
+    s = sub.add_parser("loot", help="split gold and award permanent items")
+    s.add_argument("file"); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_loot)
+    s = sub.add_parser("reaction", help="roll an improvised NPC's first reaction")
+    s.add_argument("--mod", type=int, action="append")
+    s.add_argument("--approach", choices=["friendly", "neutral", "hostile"], default="neutral")
+    s.add_argument("--roll", type=int); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_reaction)
+    s = sub.add_parser("heat", help="faction standing and heat ledger")
+    s.add_argument("action", choices=["show", "crime", "standing", "cool"]); s.add_argument("faction", nargs="?")
+    s.add_argument("--file", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "heat.json"))
+    s.add_argument("--witnesses", type=int, default=0); s.add_argument("--by", type=int, default=1); s.add_argument("--why")
+    s.set_defaults(fn=cmd_heat)
+    s = sub.add_parser("premise", help="check an adventure premise card")
+    s.add_argument("card"); s.set_defaults(fn=cmd_premise)
+    s = sub.add_parser("wander", help="random-encounter clock and resolution steps")
+    s.add_argument("--every", type=float, default=60, help="minutes between checks")
+    s.add_argument("--chance", type=int, default=6, help="1 in N per check")
+    s.add_argument("--hours", type=float, default=4); s.add_argument("--budget", type=float, default=2)
+    s.add_argument("--feet", type=int, default=10, help="distance is 2d6 times this")
+    s.add_argument("--surprise", type=int, default=3, help="each side is surprised on 1 in N")
+    s.add_argument("--placed", action="append", help="area with a placed population")
+    s.add_argument("--run", action="store_true"); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_wander)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)

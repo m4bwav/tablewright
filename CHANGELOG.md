@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.0 (2026-11-26)
+- `tt.py strength LEVELS --target-level N [--target-size 5]`: average party level (.5 rounds up) and a five-step strength label from headcount and level against the target; fails under 3 or over 7 players. Idea from the Adventurers League DM Guide 2.0.
+- `tt.py loot file.json [--seed]`: gold split evenly with the remainder named; permanent items go to the agreed PC, else the interested PC with the fewest permanent items, ties by a seeded roll; consumables do not count. Idea from the Adventurers League DM Guide 2.0.
+- `tt.py reaction`: an improvised NPC's first reaction, 2d6 plus `--mod` and `--approach`, in five bands of our own. Ideas from the Lankhmar GM guide (AD&D 2e) and the 1979 AD&D Dungeon Masters Guide.
+- `tt.py heat show|crime|standing|cool`: a faction ledger with standing (-3 to +3, each change needs a reason) and heat that rises by 1 plus witnesses per crime, through five escalation steps (quiet, noticed, collector, enforcers, open hunt). Idea from the Lankhmar GM guide.
+- `tt.py premise card.json`: core and twist, a hook layer that is not the same premise with the same root, a finish line for pursuit, an agenda per faction for a race, a losable witness or clue for investigation; warns on defend with no faulty intel or choice and an object found incomplete. Idea from the Game Ideas collection (the Big List of RPG Plots).
+- `tt.py wander`: a random-encounter clock (`--every` minutes, 1 in `--chance`, `--hours`, `--budget`), `--placed` areas, and `--run` to roll distance, surprise for each side, reaction and whether the party can evade. All numbers are ours and configurable. Idea from the 1979 AD&D Dungeon Masters Guide.
+- 7 new tests; wording, bands and thresholds are ours and unverified.
+- Skipped: campaign premise-rut check, premise and twist tables for `table combine`, two-plot physical/personal pairing, district cards, henchman hiring, forced march (outside the six asked for).
+
 ## 0.8.0 (2026-11-26)
 - `encounter`: `--wave ROUND:COUNTxFOE[:removed_by]` reinforcements with their own XP and band, a finite `--pool`, `--prep` steps that remove waves (warns when one removes nothing), `--morale`, and `--smart` foes warn with no `--escape`. Ideas from A Goblin's Tale (DM guide) and the Book of Challenges.
 - `encounter --hazard`: identical hazards count barely more than one (each repeat adds a tenth); `prep` warns on repeated hazard names. Idea from the Book of Challenges.
