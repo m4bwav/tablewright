@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.0 (2026-11-26)
+- `encounter`: `--wave ROUND:COUNTxFOE[:removed_by]` reinforcements with their own XP and band, a finite `--pool`, `--prep` steps that remove waves (warns when one removes nothing), `--morale`, and `--smart` foes warn with no `--escape`. Ideas from A Goblin's Tale (DM guide) and the Book of Challenges.
+- `encounter --hazard`: identical hazards count barely more than one (each repeat adds a tenth); `prep` warns on repeated hazard names. Idea from the Book of Challenges.
+- `table --die N`: warns when rolls do not run 1 to the die's faces; tables without a `kind` column (step tables) now check too. Idea from the Campaign Planner.
+- `threads`: `(opened: session N)` tags; open threads older than `--stale` sessions (default 3) warn. Idea from the Campaign Planner.
+- `campaign`: optional `events` (trigger and level each) and a `climax` with trigger, level, session and foreshadowing `signs` scheduled before it (`--signs`, default 3). Idea from the Campaign Planner.
+- `fiveroom`: optional puzzle `hints` (with a `baseline:` one) and `reward`. Idea from the Book of Challenges.
+- `tt.py session-log`: a session log template whose threads feed `threads`. Idea from the Adventurers League DM Guide 4.0 and the Campaign Planner.
+- 9 new tests; wording and thresholds are ours and unverified.
+- Skipped: AL party-strength overlay and loot split (more than a small item), a separate set-piece command (folded into `encounter --wave`).
+
 ## 0.7.0 (2026-11-26)
 - `tt.py mystery`: each conclusion needs 2 clues (3 is safe) a typical party can find, 3+ suspects, and an opening scene that does not point only at the culprit. Idea from the Kobold Guide to Game Design (p. 158-162).
 - `tt.py safety`: a cut call, a brake call, a debrief of 10+ minutes, content warnings for lines and veils, and every player confirmed (`--party`). Idea from Beyond Role and Play (the Hamlet safety report, Wieslander).
