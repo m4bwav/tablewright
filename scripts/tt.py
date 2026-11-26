@@ -10,6 +10,7 @@ Commands:
   prep        check a session prep card (opening, leads, NPC goals, fight exits)
   combat-log  turn times of a real fight, flags players over 90 s a turn
   threads     story promises still open, latest first; --finale fails on any open
+  session-log print a session log template (its threads feed 'threads')
   npcs        check three-line NPC cards (look; doing now; hook because why)
   world       check a setting card (6 to 8 traits, each anchored)
   fiveroom    check an adventure plan against the five-role arc
@@ -114,15 +115,24 @@ def cmd_encounter(a):
         total += xp
         if note:
             notes.append(f"foe {f}: {note}")
+    haz_xp, haz_notes = hazard_xp(a.system, a.hazard or [], a.level)
+    total += haz_xp
+    notes += haz_notes
+    waves, wave_xp, wave_warns = plan_waves(a)
     band = band_for(total, budgets)
-    nxt = [(k, v) for k, v in sorted(budgets.items(), key=lambda kv: kv[1]) if v > total]
+    nxt =[(k, v) for k, v in sorted(budgets.items(), key=lambda kv: kv[1]) if v > total]
     res = {"system": a.system, "party": a.party, "level": a.level, "xp": total, "threat": band,
            "budgets": budgets, "next": {"threat": nxt[0][0], "xp_needed": nxt[0][1] - total} if nxt else None, "notes": notes}
     if a.system == "5e" and total > budgets["high"]:
         res["notes"].append("above the High budget (2024 has no higher band): expect a character to drop")
     if a.system != "5e" and total > budgets["extreme"]:
         res["notes"].append("over the Extreme budget")
-    res["warnings"] = mission_warnings(a)
+    res["warnings"] = mission_warnings(a) + wave_warns
+    if waves:
+        res["waves"] = waves
+        res["xp_with_waves"] = total + wave_xp
+        res["threat_with_waves"] = band_for(total + wave_xp, budgets)
+        notes.append(f"with reinforcements: {total + wave_xp} XP, threat {res['threat_with_waves']}")
     bad = any("do not use" in n for n in notes)
     if a.json:
         print(json.dumps(res, indent=2))
@@ -136,6 +146,57 @@ def cmd_encounter(a):
     for w in res["warnings"]:
         print("warn: " + w)
     sys.exit(1 if bad else 0)
+
+
+HAZARD_REPEAT = 0.1  # each copy of an identical hazard adds this share of one; one answer beats them all
+
+
+def hazard_xp(system, hazards, level):
+    """Identical hazards count barely more than one: the first in full, each repeat a tenth."""
+    xp, notes = 0, []
+    for h in sorted(set(hazards)):
+        n = hazards.count(h)
+        one, note = foe_xp(system, h, level)
+        if one is None:
+            notes.append(f"hazard {h}: {note}")
+            continue
+        xp += round(one * (1 + HAZARD_REPEAT * (n - 1)))
+        if n > 1:
+            notes.append(f"hazard {h} x{n}: counted as about one; vary them so one answer does not beat all")
+    return xp, notes
+
+
+def plan_waves(a):
+    """Reinforcement waves 'ROUND:COUNTxFOE[:removed_by]'; a finite --pool; --prep steps remove waves."""
+    waves, xp, warns = [], 0, []
+    done = set(a.prep or [])
+    drawn = 0
+    for spec in a.wave or []:
+        parts = spec.split(":")
+        try:
+            rnd = int(parts[0])
+            cnt, _, foe = parts[1].partition("x")
+            cnt = int(cnt)
+        except (ValueError, IndexError):
+            die(f"bad wave {spec!r} (use ROUND:COUNTxFOE, e.g. 3:2x1, optional :removed_by)")
+        foe = foe or str(a.level)
+        by = parts[2] if len(parts) > 2 and parts[2] else None
+        w = {"round": rnd, "count": cnt, "foe": foe, "removed_by": by, "removed": bool(by and by in done)}
+        waves.append(w)
+        if w["removed"]:
+            continue
+        drawn += cnt
+        if a.pool is not None and drawn > a.pool:
+            warns.append(f"wave at round {rnd} draws past the defender pool ({drawn} of {a.pool}); cut it or grow the pool")
+        one, _ = foe_xp(a.system, foe, a.level)
+        xp += (one or 0) * cnt
+    for p in done - {w["removed_by"] for w in waves}:
+        warns.append(f"prep step {p!r} removes no wave; let it change the fight or drop it")
+    if waves and a.morale is None:
+        warns.append("reinforcements with no --morale: say when the foes retreat (e.g. half) so the fight can end")
+    if a.smart and not a.escape:
+        warns.append("intelligent foes with no escape route (--escape): they will flee anyway or fight to a pointless death")
+    return waves, xp, warns
 
 
 def mission_warnings(a):
@@ -407,6 +468,9 @@ def cmd_prep(a):
     for h in bullets("hazards"):
         if "warned:" not in h.lower():
             errs.append(f"hazard with no warning before players can prepare (add 'warned: where they learn of it'): {h}")
+    hz = [h.split(":", 1)[0].strip().lower() for h in bullets("hazards")]
+    for h in sorted({h for h in hz if hz.count(h) > 1}):
+        warns.append(f"{hz.count(h)} hazards named {h!r}: one answer beats them all, so they count as about one; vary them")
     for x in bullets("fights") + bullets("hazards"):
         lx = x.lower()
         if "lethal" in lx and "hidden: yes" in lx:
@@ -467,14 +531,59 @@ def cmd_threads(a):
     th = [l[2:].strip() for l in sec.get("threads", []) if l[:2] in ("- ", "* ")]
     if not th:
         die("no ## Threads bullets")
+    import re
+    since = {}
+    for t in th:
+        m = re.search(r"\(opened:\s*session\s*(\d+)\)", t, re.I)
+        if m:
+            since[re.sub(r"\s*\(opened:[^)]*\)", "", t)] = int(m.group(1))
+    th = [re.sub(r"\s*\(opened:[^)]*\)", "", t) for t in th]
     opened = [t.rsplit(":", 1)[0].strip() for t in th if t.rsplit(":", 1)[-1].strip().lower() != "paid"]
     print(f"{len(th) - len(opened)} paid, {len(opened)} open")
+    now = a.session or max(since.values(), default=0)
+    for t in th:
+        name = t.rsplit(":", 1)[0].strip()
+        if name in opened and t in since and now - since[t] > a.stale:
+            print(f"warn: {name}: open {now - since[t]} sessions (since session {since[t]}); "
+                  f"pay it off, advance it or drop it on purpose (--stale {a.stale})")
     if opened:
         # Bring threads back roughly in reverse order: the latest promise pays off first.
         print("pay off next (latest first): " + "; ".join(reversed(opened)))
     if a.finale and opened:
         print(f"error: finale with {len(opened)} open promise(s); pay them off or drop them on purpose")
         sys.exit(1)
+
+
+SESSION_LOG = """# Session {n} log
+
+## Played
+- date:
+- players present:
+- characters present:
+
+## Summary
+- (three to five lines; the first becomes next session's recap)
+
+## NPCs met
+- Name: what they want now
+
+## Places
+-
+
+## Loot
+- item: who took it
+
+## Threads
+- lead or promise: open (opened: session {n})
+
+## Next opening
+- where the next session starts
+"""
+
+
+def cmd_sessionlog(a):
+    """A session log in prep-card markdown; its ## Threads feed 'tt.py threads'."""
+    print(SESSION_LOG.format(n=a.session), end="")
 
 
 def cmd_npcs(a):
@@ -533,6 +642,14 @@ def cmd_fiveroom(a):
             mp = x.get("min_players")
             if mp and party and mp > party:
                 errs.append(f"area {n}: needs {mp} players, party has {party}")
+            if "hints" in x or "reward" in x:
+                hints = x.get("hints") or []
+                if not hints:
+                    warns.append(f"area {n}: puzzle has no hints; write them before play so a stuck table can earn one")
+                elif not any(str(h).lower().startswith(("baseline", "any")) for h in hints):
+                    warns.append(f"area {n}: no baseline hint (start one 'baseline:'); any check should at least name the puzzle's type")
+                if not x.get("reward"):
+                    warns.append(f"area {n}: puzzle has no reward; solving it should pay")
             c = x.get("clue_in")
             if not isinstance(c, int) or not 1 <= c < n:
                 warns.append(f"area {n}: no clue planted in an earlier area (clue_in)")
@@ -641,6 +758,32 @@ def cmd_campaign(a):
     for npc in c.get("payback", []):
         if not any(npc in x.get("payoff", []) for x in adv):
             warns.append(f"{npc} is owed payback with no payoff beat")
+    last = 0
+    for e in c.get("events", []):
+        n = e.get("name", "event")
+        for k in ("trigger", "level"):
+            if not e.get(k):
+                errs.append(f"event {n}: no {k} (plan arcs by what sets them off and the party level, not by date)")
+        if isinstance(e.get("level"), int):
+            if e["level"] < last:
+                warns.append(f"event {n}: level {e['level']} after an event at level {last}")
+            last = max(last, e["level"])
+    cl = c.get("climax")
+    if cl:
+        for k in ("trigger", "level"):
+            if not cl.get(k):
+                errs.append(f"climax: no {k}")
+        signs, at = cl.get("signs", []), cl.get("session")
+        if len(signs) < a.signs:
+            warns.append(f"climax has {len(signs)} foreshadowing signs, want {a.signs}+")
+        for s in signs:
+            t, when = s.get("text", "?"), s.get("session")
+            if not isinstance(when, int):
+                errs.append(f"sign {t!r}: no session to show it in")
+            elif isinstance(at, int) and when >= at:
+                errs.append(f"sign {t!r}: session {when} is not before the climax (session {at})")
+        if signs and not isinstance(at, int):
+            warns.append("climax has no session, so sign timing cannot be checked")
     report(errs, warns, f"{len(adv)} adventures, {len(c.get('pcs', []))} PCs with plotlines")
 
 
@@ -817,6 +960,9 @@ def cmd_safety(a):
     report(errs, warns, f"cut call set, {len(conf)} player(s) confirmed")
 
 
+DICE = (2, 3, 4, 6, 8, 10, 12, 20, 100)
+
+
 def roll_range(r):
     lo, _, hi = r["roll"].strip().partition("-")
     return int(lo), int(hi or lo)
@@ -887,12 +1033,18 @@ def cmd_table(a):
     for r in rows:
         lo, hi = roll_range(r)
         span = set(range(lo, hi + 1))
-        kind = r["kind"].strip().lower()
+        kind = (r.get("kind") or "").strip().lower()
         if kind == "fight":
             fights += len(span)
             if r.get("difficulty", "").strip().lower() in ("trivial", "easy", "low") and r.get("avoidable", "").strip().lower() not in YES:
                 warns.append(f"roll {r['roll']}: easy fight the party cannot avoid (a speed bump; make it avoidable)")
     top = max(covered) if covered else 0
+    low = min(covered) if covered else 1
+    if a.die:
+        if top != a.die or low != 1:
+            warns.append(f"rolls run {low} to {top} but the die is d{a.die}: every face 1 to {a.die} needs exactly one row")
+    elif top not in DICE or low != 1:
+        warns.append(f"rolls run {low} to {top}, not a standard die; pass --die N if that is meant")
     share = fights / top if top else 0
     if share > a.max_fight:
         warns.append(f"fights fill {share:.0%} of the table, over {a.max_fight:.0%}; travel should be mostly other things")
@@ -955,6 +1107,13 @@ def main(argv=None):
             s.add_argument("--mission", help="what the party must do: kill, rescue, hold, escape, steal, ritual...")
             s.add_argument("--clock", type=int, help="rounds before the mission fails")
             s.add_argument("--healers", type=int, default=0, help="foes that heal or grant temp HP")
+            s.add_argument("--hazard", action="append", help="hazard level or CR; identical repeats count barely more than one")
+            s.add_argument("--wave", action="append", help="reinforcements ROUND:COUNTxFOE[:removed_by]")
+            s.add_argument("--pool", type=int, help="total defenders the waves can draw from")
+            s.add_argument("--prep", action="append", help="a prep step the party finished; removes waves naming it")
+            s.add_argument("--morale", help="when the foes retreat, e.g. half or 3")
+            s.add_argument("--smart", action="store_true", help="the foes are intelligent")
+            s.add_argument("--escape", help="the foes' way out")
         else:
             s.add_argument("--threat", default="moderate")
         s.add_argument("--json", action="store_true")
@@ -976,7 +1135,12 @@ def main(argv=None):
     s.add_argument("log"); s.add_argument("--budget", type=float, default=90); s.add_argument("--gm", default="GM")
     s.set_defaults(fn=cmd_combatlog)
     s = sub.add_parser("threads", help="open and paid story promises")
-    s.add_argument("card"); s.add_argument("--finale", action="store_true"); s.set_defaults(fn=cmd_threads)
+    s.add_argument("card"); s.add_argument("--finale", action="store_true")
+    s.add_argument("--session", type=int, help="the current session number (default: the latest opened)")
+    s.add_argument("--stale", type=int, default=3, help="flag open threads older than this many sessions")
+    s.set_defaults(fn=cmd_threads)
+    s = sub.add_parser("session-log", help="print a session log template that feeds the next prep card")
+    s.add_argument("--session", type=int, default=1); s.set_defaults(fn=cmd_sessionlog)
     s = sub.add_parser("npcs", help="check three-line NPC cards")
     s.add_argument("card"); s.set_defaults(fn=cmd_npcs)
     s = sub.add_parser("world", help="check a setting card's traits")
@@ -987,6 +1151,7 @@ def main(argv=None):
     s.add_argument("table", help="CSV, or 'combine' then 2 to 4 CSVs")
     s.add_argument("tables", nargs="*")
     s.add_argument("--max-fight", type=float, default=0.35)
+    s.add_argument("--die", type=int, help="faces of the die the table is rolled on")
     s.add_argument("--seed", type=int); s.add_argument("--count", type=int, default=6)
     s.set_defaults(fn=cmd_table)
     s = sub.add_parser("mystery", help="check a mystery's clues and suspects")
@@ -1001,7 +1166,8 @@ def main(argv=None):
     s = sub.add_parser("twist", help="check a set of planned twists")
     s.add_argument("twists"); s.set_defaults(fn=cmd_twist)
     s = sub.add_parser("campaign", help="check a campaign plan")
-    s.add_argument("plan"); s.set_defaults(fn=cmd_campaign)
+    s.add_argument("plan"); s.add_argument("--signs", type=int, default=3, help="foreshadowing signs wanted per climax")
+    s.set_defaults(fn=cmd_campaign)
     s = sub.add_parser("hooks", help="check a city hook deck")
     s.add_argument("deck"); s.set_defaults(fn=cmd_hooks)
     s = sub.add_parser("tavern", help="check a tavern or inn card")
