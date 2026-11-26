@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.23.0 (2026-11-26)
+- `tt.py xp-gap --party N --level L --award X [--each] [--xp a,b]`: per PC, does the adventure's XP reach the next level and by how much (5e advancement from SRD 5.2.1, CC-BY-4.0). Idea from Dungeons on Demand: Eyes on the Prize, pp. 5, 27.
+- `rooms`: a `roleplay: true` room with no `fallback` dice check warns. Idea from Dungeons on Demand: No Laughing Matter, p. 32.
+- `rooms --keys` foes: `return_to` must be a room and wants a `return_after`; `fall` damage with no `flee_to` warns. Ideas from Best Served Cold, p. 10, and Eyes on the Prize, p. 13.
+- All rules are ours; no book text copied. 3 new tests (214 total).
+
 ## 0.22.0 (2026-11-26)
 - `rooms --keys` with several entrances: every room with `entry: true` is checked, so a key out of reach from any one entrance is flagged (else the first room is the entrance). Idea from Dungeons on Demand: Insidious Experiments, p. 5.
 - `rooms --keys` multi-key locks: a lock given as a list needs all its keys; a key reachable only through that lock is flagged. Idea from Dungeons on Demand: Old Habits, pp. 18, 24.

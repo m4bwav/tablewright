@@ -3270,6 +3270,8 @@ def cmd_rooms(a):
             warns.append(f"{n}: hard with every dial at 1; turn up damage, disruption or duration")
         if r.get("objective") and len(r.get("paths") or []) < 2:
             warns.append(f"{n}: objective with {len(r.get('paths') or [])} paths; give 2+ ways to reach it")
+        if r.get("roleplay") and not r.get("fallback"):
+            warns.append(f"{n}: roleplay gate with no fallback; give a dice check for when the talk stalls")
         for roll in r.get("rolls") or []:
             if not roll.get("on_fail"):
                 warns.append(f"{n}: roll {roll.get('skill', '?')} with no on_fail; a failed roll must still move the scene")
@@ -3332,6 +3334,13 @@ def lock_key_errors(rooms):
             to = f.get("flee_to")
             if to and to not in by:
                 errs.append(f"{r.get('name', '?')}: {f.get('name', 'foe')} flees to {to}, no such room")
+            back = f.get("return_to")
+            if back and back not in by:
+                errs.append(f"{r.get('name', '?')}: {f.get('name', 'foe')} returns to {back}, no such room")
+            elif back and not f.get("return_after"):
+                warns.append(f"{r.get('name', '?')}: {f.get('name', 'foe')} returns to {back} with no return_after; say when")
+            if f.get("fall") and not to:
+                warns.append(f"{r.get('name', '?')}: {f.get('name', 'foe')} has fall damage but no flee_to")
     if not any("exits" in r for r in rooms):
         return errs, warns
     entries = [r.get("name", "?") for r in rooms if r.get("entry")] or [rooms[0].get("name", "?")]
@@ -3374,6 +3383,36 @@ def lock_key_errors(rooms):
                     if to not in reach_rooms(by, start, found - {k}):
                         warns.append(f"{rn}: {f.get('name', 'foe')} carries key {k} and flees past its lock to {to}; the key goes out of reach{where}")
     return errs, warns
+
+
+# D&D 5e 2024 (SRD 5.2.1, CC-BY-4.0, attribution above): XP total needed for levels 1 to 20.
+LEVEL_XP_5E = (0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000, 85000, 100000, 120000, 140000,
+               165000, 195000, 225000, 265000, 305000, 355000)
+
+
+def cmd_xp_gap(a):
+    """Does an adventure's total XP award carry each PC to the next level? Award split evenly unless --each."""
+    if not 1 <= a.level <= 20:
+        die("level 1 to 20")
+    if a.level == 20:
+        print("level 20 is the cap; XP no longer levels")
+        return
+    share = a.award if a.each else a.award // max(1, a.party)
+    start = [int(x) for x in a.xp.split(",")] if a.xp else [LEVEL_XP_5E[a.level - 1]] * a.party
+    short = 0
+    for i, have in enumerate(start, 1):
+        need = LEVEL_XP_5E[a.level] - have
+        if need <= 0:
+            print(f"PC {i}: already at level {a.level + 1} XP")
+        elif share >= need:
+            print(f"PC {i}: levels with {share - need} XP to spare")
+        else:
+            short += 1
+            print(f"PC {i}: {need - share} XP short of level {a.level + 1} ({share} of {need})")
+    if short:
+        print(f"warn: {short} PC(s) end below level {a.level + 1}; add {a.award} more or plan a milestone")
+    else:
+        print(f"ok: every PC reaches level {a.level + 1}")
 
 
 def cmd_session_end(a):
@@ -5359,6 +5398,12 @@ def main(argv=None):
     s.set_defaults(fn=cmd_favor)
     s = sub.add_parser("xp", help="story and foe XP award, split among survivors")
     s.add_argument("file"); s.set_defaults(fn=cmd_xp)
+    s = sub.add_parser("xp-gap", help="does an adventure's XP award reach the next level (5e)")
+    s.add_argument("--party", type=int, default=4); s.add_argument("--level", type=int, required=True)
+    s.add_argument("--award", type=int, required=True, help="total XP the adventure gives")
+    s.add_argument("--each", action="store_true", help="the award is per PC, not split")
+    s.add_argument("--xp", help="each PC's current XP, comma list (default: the level's floor)")
+    s.set_defaults(fn=cmd_xp_gap)
     s = sub.add_parser("morale", help="2d10 morale check against a modified rating")
     s.add_argument("--rating", type=int); s.add_argument("--mod", action="append", help="NAME=V")
     s.add_argument("--break", dest="break_units", type=int, help="starting units: print the army break point")
