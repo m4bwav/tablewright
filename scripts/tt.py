@@ -1114,7 +1114,7 @@ def cmd_sessionlog(a):
 
 
 NPC_DEPTH = ("ideal", "bond", "flaw")
-NPC_EXTRA = ("major", "secret", "joins_party", "exit", "tactics", "but")
+NPC_EXTRA = ("major", "secret", "joins_party", "exit", "tactics", "but", "roles", "tell", "revealed")
 
 
 def cmd_npcs(a):
@@ -1138,6 +1138,13 @@ def cmd_npcs(a):
             print(f"warn: {name.strip()}: joins the party with no exit: (how and when they leave so the PCs stay the heroes)")
         if extra.get("tactics") and "flee" not in extra["tactics"].lower():
             print(f"warn: {name.strip()}: tactics with no flee (the HP fraction where they run, e.g. flee 1/3)")
+        if extra.get("secret") and not extra.get("tell"):
+            print(f"warn: {name.strip()}: secret with no tell: (players cannot discover it)")
+        if extra.get("secret") and not extra.get("revealed"):
+            print(f"warn: {name.strip()}: secret with no revealed: (what changes when it comes out)")
+        roles = [x for x in extra.get("roles", "").replace("|", ",").split(",") if x.strip()]
+        if extra.get("major", "").lower() in ("true", "yes") and len(roles) < 2:
+            print(f"warn: {name.strip()}: major NPC with {len(roles)} roles:, give 2+ so they stay useful (e.g. roles: fence, informant)")
         if getattr(a, "but", False) and not extra.get("but") and " but " not in f" {' '.join(parts).lower()} ":
             print(f"warn: {name.strip()}: no contradiction; add a 'but' to the look, activity or hook, or a but: field")
         if len(parts) != 3 or not all(parts):
@@ -1282,6 +1289,13 @@ def cmd_villain(a):
             nums = sorted(int(x.split(".", 1)[0]) for x in (l.strip() for l in lines) if re.match(r"\d+\.\s", x))
             if nums != list(range(1, int(m.group(1)) + 1)):
                 die(f"{name}: drive_die {dd[0]} wants actions numbered 1 to {m.group(1)}, found {nums}")
+        goals, meets = key("goal"), key("meet")
+        if goals:
+            for g in goals:
+                if not any(g.lower() in m.lower() for m in meets):
+                    warns.append(f"{name}: goal {g!r} has no meet: line naming it (where the party runs into it)")
+            if len(meets) < 3:
+                warns.append(f"{name}: {len(meets)} meet: lines before the showdown, want 3+ so the villain is known before the fight")
         if key("where") and len(where) < 2:
             warns.append(f"{name}: met in one place only; give two or more (where: a, b) so a missed scene is not a lost villain")
     if not sec:
@@ -1326,6 +1340,19 @@ def cmd_campaign(a):
             warns.append(f"{n}: nobody opposes it or profits from it (opposed_by:, opportunist:)")
         if x.get("major") and i + 1 < len(adv) and not adv[i + 1].get("aftermath"):
             warns.append(f"{n}: major adventure with no aftermath or downtime after it")
+    for i, x in enumerate(adv):
+        n = x.get("name", f"#{i + 1}")
+        if i and not x.get("link"):
+            warns.append(f"{n}: no link: (what sends the party here from the last adventure)")
+        lv, pl = x.get("level"), x.get("party_level", c.get("party_level"))
+        if isinstance(lv, int) and isinstance(pl, int) and lv - pl >= 2 and x.get("warned") is not True:
+            warns.append(f"{n}: level {lv} is {lv - pl} above the party (level {pl}) with no warned: true (a sign it is too deadly yet)")
+    if len(adv) > 1 and not c.get("guide"):
+        warns.append("no guide: (a person, omen or rumour source that nudges the party to the next adventure)")
+    if c.get("motif") and adv:
+        hit = sum(1 for x in adv if c["motif"] in x.get("beats", []))
+        if hit * 3 < len(adv):
+            warns.append(f"motif {c['motif']!r} is in the beats of {hit} of {len(adv)} adventures, want a third or more")
     for npc in c.get("payback", []):
         if not any(npc in x.get("payoff", []) for x in adv):
             warns.append(f"{npc} is owed payback with no payoff beat")
@@ -1564,6 +1591,25 @@ def cmd_mystery(a):
     opening = [x for x in clues if x.get("scene", 1) == first]
     if opening and targets and all(x.get("points_to") in targets for x in opening):
         warns.append(f"every scene {first} clue points at the culprit; the case ends in the first scene")
+    sched = m.get("schedule", [])
+    names = {x.get("id") or x.get("name") for x in clues} | {e.get("clue") for e in sched}
+    seen, last = set(), None
+    for i, e in enumerate(sched):
+        n, lf = e.get("clue", f"#{i + 1}"), e.get("lead_from")
+        if i and not lf:
+            warns.append(f"schedule {n}: no lead_from (which earlier clue points here)")
+        elif lf and lf not in names:
+            errs.append(f"schedule {n}: lead_from {lf!r} is not a known clue")
+        elif lf and lf not in seen:
+            warns.append(f"schedule {n}: lead_from {lf!r} is not an earlier clue")
+        if not e.get("partial"):
+            warns.append(f"schedule {n}: no partial (what a half-solved clue still gives)")
+        at = e.get("at")
+        if isinstance(at, (int, float)):
+            if last is not None and at < last:
+                warns.append(f"schedule {n}: at {at} comes before the previous entry ({last}); keep times ascending")
+            last = at
+        seen.add(n)
     report(errs, warns, f"{len(concl)} conclusions, {len(clues)} clues, {len(sus)} suspects")
 
 
@@ -1722,6 +1768,13 @@ def cmd_table(a):
         faces = int(dn.lstrip("dD")) if dn else (max(scov) if scov else 0)
         if len(srows) != faces:
             errs.append(f"roll {r['roll']}: sub-table {f} has {len(srows)} rows for a d{faces}; one row per face")
+    sides = [(r.get("side") or "").strip().lower() for r in rows if "side" in r]
+    if sides:
+        bad = sorted(set(sides) - {"party", "residents", "both"})
+        if bad:
+            warns.append(f"side values {bad}; use party, residents or both")
+        if not {"residents", "both"} & set(sides):
+            warns.append("no row is residents or both; wanderers never trouble the dungeon's own dwellers")
     share = fights / top if top else 0
     if share > a.max_fight:
         warns.append(f"fights fill {share:.0%} of the table, over {a.max_fight:.0%}; travel should be mostly other things")
@@ -4214,6 +4267,146 @@ def cmd_hoard(a):
     report(errs, warns, f"{len(ps)} parcels, {len(kinds)} types")
 
 
+GROUP_TIERS = ("all start well placed", "split start: successes ahead, failures behind", "everyone starts on the back foot")
+
+
+def cmd_groupcheck(a):
+    """Group check: more than half succeed, some succeed, or none; where each result starts the next scene."""
+    import random
+    if a.roll:
+        if a.dc is None:
+            die("--roll needs --dc")
+        bon = [int(x) for x in (a.bonus or "0").split(",")]
+        bon = (bon * a.party)[:a.party]
+        rng = random.Random(a.seed)
+        k = 0
+        for i, b in enumerate(bon, 1):
+            r = rng.randint(1, 20)
+            ok = r + b >= a.dc
+            k += ok
+            print(f"PC {i}: d20 {r} + {b} = {r + b} {'success' if ok else 'fail'}")
+    else:
+        if a.successes is None:
+            die("give --successes K or --roll --dc N")
+        k = a.successes
+    if not 0 <= k <= a.party:
+        die(f"successes {k} outside 0 to {a.party}")
+    tier = 0 if k * 2 > a.party else 1 if k else 2
+    print(f"{k} of {a.party} succeed: {('more than half', 'some', 'none')[tier]}")
+    print(f"start: {GROUP_TIERS[tier]}")
+    if tier == 1:
+        print(f"  {k} succeeding PC(s) pick their spot; {a.party - k} failing PC(s) start where the GM puts them")
+
+
+def cmd_threshold(a):
+    """Damage the party must deal in one round to break a set piece, as a guide: party x (4 + level), +20% per shield."""
+    if a.apl < 1:
+        die("apl must be at least 1")
+    if a.shield < 0:
+        die("shield must be 0 or more")
+    base = a.party * (4 + a.apl)
+    total = round(base * (1 + 0.2 * a.shield))
+    print(f"threshold: {total} damage in one round (party {a.party} x {4 + a.apl}"
+          + (f", +{a.shield * 20}% for {a.shield} shield(s)" if a.shield else "") + ")")
+    print("guide only: tune it to your party's real round damage")
+
+
+def cmd_convert(a):
+    """Old-edition foes to stand-ins: name, treat_as, cr, tweaks, boss; flags clones and over-level foes."""
+    ents = load_list(a.file, "entries")
+    lo, _, hi = a.levels.partition("-")
+    top = int(hi or lo)
+    errs, warns, by = [], [], {}
+    for e in ents:
+        n = e.get("name") or "?"
+        if not e.get("treat_as"):
+            errs.append(f"{n}: no treat_as (the stat block it borrows)")
+        cr = str(e.get("cr", "")).strip()
+        cr = {"0.125": "1/8", "0.25": "1/4", "0.5": "1/2"}.get(cr, cr)
+        if not cr:
+            errs.append(f"{n}: no cr")
+        elif cr not in CR_XP:
+            errs.append(f"{n}: cr {cr!r} not on the 5e ladder")
+        else:
+            e["_cr"] = cr
+            if cr_value(cr) > top + 2 and e.get("boss") is not True:
+                warns.append(f"{n}: CR {cr} is over level {top} + 2 with no boss: true (a party of {a.levels} may not survive it)")
+        if e.get("treat_as"):
+            by.setdefault(e["treat_as"], []).append(e)
+    for t, es in by.items():
+        if len(es) >= 3 and sum(1 for e in es if e.get("tweaks")) < len(es) - 1:
+            warns.append(f"{len(es)} foes use {t} with too few tweaks; they will play identically (tweak all but one)")
+        crs = sorted({e["_cr"] for e in es if "_cr" in e}, key=cr_value)
+        if crs:
+            print(f"{t}: {len(es)} stand-in(s), " + ", ".join(f"CR {c} {CR_XP[c]} XP" for c in crs))
+    report(errs, warns, f"{len(ents)} entries, {len(by)} stand-ins")
+
+
+def cmd_develop(a):
+    """Develop a hook into an adventure: origin, why_now, if_ignored, 2+ tier variants with encounters and rewards."""
+    d = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    errs, warns = [], []
+    for k, why in (("origin", "where the trouble began"), ("why_now", "why it comes to a head now")):
+        if not d.get(k):
+            errs.append(f"no {k} ({why})")
+    if not d.get("if_ignored"):
+        warns.append("no if_ignored (what happens if the party walks away)")
+    vs = d.get("variants", [])
+    if len(vs) < 2:
+        warns.append(f"{len(vs)} variant(s); give 2+ tiers so the hook fits more than one party level")
+    tiers = [v.get("tier") for v in vs]
+    for t in sorted({t for t in tiers if tiers.count(t) > 1}, key=str):
+        warns.append(f"tier {t} used twice")
+    for v in vs:
+        vn = f"tier {v.get('tier', '?')}"
+        if not v.get("encounters"):
+            errs.append(f"{vn}: no encounters")
+        if not v.get("rewards"):
+            errs.append(f"{vn}: no rewards")
+        for e in v.get("encounters", []):
+            en = e.get("name", "?")
+            if not e.get("warning"):
+                warns.append(f"{vn} {en}: no warning (a sign before it hits)")
+            if not e.get("bystanders"):
+                warns.append(f"{vn} {en}: no bystanders (who else is at risk)")
+        for r in v.get("rewards", []):
+            if not (r.get("where") or r.get("from")):
+                warns.append(f"{vn} reward {r.get('name', '?')}: neither where nor from (how the party gets it)")
+    report(errs, warns, f"{len(vs)} variants")
+
+
+def cmd_realm(a):
+    """Kingdom or region card: ruler, relations with deterrent and posture, entry, an uncontrolled place, hooks, a custom."""
+    d = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    errs, warns = [], []
+    ru = d.get("ruler") or {}
+    if not ru.get("name"):
+        errs.append("no ruler.name")
+    if not d.get("relations"):
+        errs.append("no relations (neighbours and how the realm stands with them)")
+    if not ru.get("chosen_by"):
+        warns.append("no ruler.chosen_by (how the ruler got the seat)")
+    if not ru.get("goal"):
+        warns.append("no ruler.goal")
+    for r in d.get("relations", []):
+        for k in ("deterrent", "posture"):
+            if not r.get(k):
+                warns.append(f"relation {r.get('name', '?')}: no {k}")
+    if not d.get("entry"):
+        warns.append("no entry (how the party arrives and what they see first)")
+    places = d.get("places", [])
+    if not any(p.get("controlled") is False for p in places):
+        warns.append("no place with controlled: false (a hole in the crown's reach)")
+    for p in places:
+        if not p.get("hook"):
+            warns.append(f"place {p.get('name', '?')}: no hook")
+    if not (d.get("culture") or {}).get("custom"):
+        warns.append("no culture.custom (one local custom the party will notice)")
+    if a.strict:
+        errs, warns = errs + warns, []
+    report(errs, warns, f"realm with {len(places)} places")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -4555,6 +4748,22 @@ def main(argv=None):
     s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_vote)
     s = sub.add_parser("hoard", help="check hoard parcels: 3-5, a magic item, 3+ types")
     s.add_argument("file"); s.set_defaults(fn=cmd_hoard)
+    s = sub.add_parser("groupcheck", help="group check tier and where each result starts")
+    s.add_argument("--party", type=int, default=4); s.add_argument("--successes", type=int)
+    s.add_argument("--roll", action="store_true"); s.add_argument("--dc", type=int)
+    s.add_argument("--bonus", help="comma list of bonuses, one per PC (repeats if short)"); s.add_argument("--seed", type=int)
+    s.set_defaults(fn=cmd_groupcheck)
+    s = sub.add_parser("threshold", help="damage needed in one round to break a set piece (a guide)")
+    s.add_argument("--party", type=int, default=4); s.add_argument("--apl", type=int, required=True)
+    s.add_argument("--shield", type=int, default=0); s.set_defaults(fn=cmd_threshold)
+    s = sub.add_parser("convert", help="check old-edition foe stand-ins: treat_as, cr, tweaks, boss")
+    s.add_argument("file"); s.add_argument("--levels", default="1-3"); s.add_argument("--system", choices=["5e"], default="5e")
+    s.set_defaults(fn=cmd_convert)
+    s = sub.add_parser("develop", help="check a hook developed into tiered adventure variants")
+    s.add_argument("file"); s.set_defaults(fn=cmd_develop)
+    s = sub.add_parser("realm", help="check a kingdom or region card")
+    s.add_argument("file"); s.add_argument("--strict", action="store_true", help="warnings fail too")
+    s.set_defaults(fn=cmd_realm)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)

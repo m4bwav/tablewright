@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.18.0 (2026-11-26)
+- `campaign`: `link` per adventure, a plan `guide`, level gating with `warned`, and `motif` beats; `villain` `goal:`/`meet:` coverage. Idea from a Curse of Strahd guide.
+- `mystery` `schedule` (lead_from, partial, ascending times), `tt.py groupcheck` and `tt.py threshold`; hazard rider advice. Idea from A Scream in the Night.
+- `tt.py convert` (old-edition foes as 5e stand-ins) and `table` `side` column. Idea from a Keep on the Borderlands conversion.
+- `npcs` `roles`, `tell`, `revealed`. Idea from Dungeons on Demand: NPC Codex.
+- `tt.py develop` (hook to tiered adventure variants). Idea from Dungeons on Demand: Adventure Awaits.
+- `tt.py realm` (kingdom card). Idea from Dungeons on Demand: Crown and Kingdom.
+- All thresholds are ours; no book text copied. 12 new tests (185 total).
+
 ## 0.17.0 (2026-11-26)
 - `settlement`: optional government, defence (patrol, muster, allies), commerce (banned, black_market), lodgings and sights blocks, each with warnings. Idea from Dungeons on Demand: Cities & Towns.
 - `tracker poison --save-each --dc N --potency up|down`, poison cards with `potency` and `shelf_life`. Idea from a poisons supplement, pp. 2-4.
