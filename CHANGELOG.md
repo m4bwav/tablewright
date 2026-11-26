@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0 (2026-11-26)
+- `tt.py villain`: villain cards (want, public face, reach, indirect harms, offers with more than one option). Idea from Johnn Four, 7 Ways to Improve Your GMing (p. 13-14, 20).
+- `tt.py twist`: planned twists need a workaround when they remove an ability, spread over axes and include a positive one. Idea from McDonald, Plot Twists (p. 4-8).
+- `tt.py campaign`: PC plotlines, adventure phase and reason, written-out NPCs stay out, opposition, aftermath after major adventures, payback payoffs. Idea from Johnn Four, Campaign Creation Guide (p. 59, 93, 122-133).
+- `prep`: optional `## Clock` with a consequence per step and a `shown:` line. Idea from Wick, Play Dirty.
+- 4 new tests; wording and thresholds are ours and unverified.
+
 ## 0.4.0 (2026-11-26)
 - `tt.py table`: random encounter table check (roll gaps and overlaps, fight share, unavoidable easy fights). Idea from Nerzugal's Dungeon Master Toolkit (travel tables).
 - `tt.py item`: magic items pair each boon with an equal or stronger drawback. Idea from Nerzugal's Dungeon Master Toolkit.
