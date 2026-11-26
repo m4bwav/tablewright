@@ -1,0 +1,6 @@
+[{"name": "Gale Boots", "benefit_tier": "moderate", "drawback_tier": "moderate", "uses": "per-day"},
+ {"name": "Wild Die", "benefit_tier": "minor", "drawback_tier": "minor", "cost_axis": "risk", "uses": "at-will", "unpredictable": true},
+ {"name": "Far Mirror", "benefit_tier": "major", "drawback_tier": "major", "cost_axis": "mind", "uses": "charges",
+  "bypasses": ["scouting"], "friction": []},
+ {"name": "Sending Shell", "benefit_tier": "major", "drawback_tier": "major", "cost_axis": "time", "uses": "once",
+  "bypasses": ["communication"], "friction": ["the sea must be in earshot"]}]

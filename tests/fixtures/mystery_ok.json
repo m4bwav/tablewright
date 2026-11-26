@@ -1,0 +1,15 @@
+{"party_level": 4,
+ "conclusions": [{"id": "poison"}, {"id": "miller", "final": true}],
+ "clues": [
+  {"points_to": "poison", "source": "the cup", "dc": 12, "scene": 1},
+  {"points_to": "poison", "source": "the healer", "dc": 14, "scene": 1},
+  {"points_to": "poison", "source": "the herb shop", "dc": 10, "scene": 2},
+  {"points_to": "miller", "source": "flour on the sill", "dc": 15, "scene": 2},
+  {"points_to": "miller", "source": "the ledger", "dc": 13, "scene": 2},
+  {"points_to": "miller", "source": "the dog", "dc": 11, "scene": 3}
+ ],
+ "suspects": [
+  {"name": "miller", "motive": "debt", "opportunity": "delivered bread", "culprit": true},
+  {"name": "cook", "motive": "jealousy", "opportunity": "kitchen"},
+  {"name": "nephew", "motive": "inheritance", "opportunity": "at dinner"}
+ ]}

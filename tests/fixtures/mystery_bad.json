@@ -1,0 +1,14 @@
+{"party_level": 2,
+ "conclusions": [{"id": "vault"}, {"id": "clerk", "final": true}, {"id": "tunnel"}],
+ "clues": [
+  {"points_to": "clerk", "source": "the key", "dc": 12, "scene": 1},
+  {"points_to": "clerk", "source": "the guard", "dc": 13, "scene": 1},
+  {"points_to": "vault", "source": "scratches", "dc": 20, "scene": 2},
+  {"points_to": "vault", "source": "dust", "dc": 22, "scene": 2},
+  {"points_to": "vault", "source": "a coin", "dc": 25, "scene": 3},
+  {"points_to": "tunnel", "source": "mud", "dc": 10, "scene": 2}
+ ],
+ "suspects": [
+  {"name": "clerk", "motive": "greed", "opportunity": "keys", "culprit": true},
+  {"name": "guard", "motive": "bribe", "opportunity": "night shift"}
+ ]}
