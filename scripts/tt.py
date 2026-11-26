@@ -172,6 +172,8 @@ def cmd_encounter(a):
     if a.system != "5e" and total > budgets["extreme"]:
         res["notes"].append("over the Extreme budget")
     res["warnings"] = mission_warnings(a) + wave_warns + role_warnings(roles, len(a.foe)) + solo_horde_warnings(a)
+    if total > budgets[deadly] and not a.exit:
+        res["warnings"].append(f"above {deadly.title()} with no --exit: name the way out (retreat, safe room, parley)")
     if roles:
         res["roles"] = roles
     if waves:
@@ -1688,6 +1690,22 @@ def read_table(path):
     return rows, covered, errs
 
 
+def filter_rows(rows, filters, name):
+    """Keep rows whose column matches each key=value; a blank or 'any' cell matches all; '|' or ';' list several."""
+    for f in filters:
+        k, _, v = f.partition("=")
+        if not k or not v:
+            die(f"--filter {f!r}: write key=value")
+        if rows and k not in rows[0]:
+            continue
+        v = v.strip().lower()
+        rows = [r for r in rows if (r.get(k) or "").strip().lower() in ("", "any")
+                or v in [x.strip().lower() for x in (r.get(k) or "").replace(";", "|").split("|")]]
+    if not rows:
+        die(f"{name}: no rows left after --filter")
+    return rows
+
+
 def cmd_combine(a):
     """Roll 2 to 4 tables together: K distinct combinations, seeded."""
     import itertools, random
@@ -1700,7 +1718,11 @@ def cmd_combine(a):
             die(f"{t}: " + "; ".join(errs))
         if len(rows) < 6:
             die(f"{t}: {len(rows)} rows, want at least 6 so combinations stay varied")
+        rows = filter_rows(rows, a.filter or [], t)
         tabs.append(rows)
+    for f in a.filter or []:
+        if not any(f.partition("=")[0] in rows[0] for rows in tabs):
+            die(f"--filter {f!r}: no table has that column")
     label = lambda r: " / ".join(v.strip() for k, v in r.items() if k != "roll" and v and v.strip()) or r["roll"]
     total = 1
     for rows in tabs:
@@ -2185,6 +2207,7 @@ def cmd_challenge(a):
             if not ms:
                 warns.append("long task with no milestones; partial progress should show and pay")
     errs += challenge_caps(d, skills, succ, warns)
+    challenge_tiers(d, succ, errs, warns)
     ft = d.get("on_fail_time")
     if ft is not None:
         if not isinstance(ft, int) or ft < 1:
@@ -2228,6 +2251,55 @@ def challenge_caps(d, skills, succ, warns):
         if s.get("max", succ) >= succ and not s.get("requires"):
             warns.append(f"{s.get('name')}: uncapped, it can finish the challenge alone; give it a max")
     return errs
+
+
+CHALLENGE_BONUS = 5  # an average PC's skill bonus at low level; our number
+
+
+def challenge_tiers(d, succ, errs, warns):
+    """Graded tiers [{dc, gain}] and botch [{under, gain<0}], timed complications, and expected rounds at an average roll."""
+    import math
+    tiers = d.get("tiers") or []
+    comps = d.get("complications") or []
+    for c in comps:
+        rnd, every = c.get("round"), c.get("every")
+        if not isinstance(rnd, int) and not isinstance(every, int):
+            errs.append(f"complication {c.get('effect', '?')!r}: give round or every")
+        if not c.get("warning"):
+            warns.append(f"complication {c.get('effect', '?')!r}: no warning; show it coming a round before")
+        if c.get("removes") and not c.get("stop"):
+            warns.append(f"complication {c.get('effect', '?')!r} removes successes with no stop: name how the party prevents it")
+    if not tiers or not isinstance(succ, int):
+        return
+    up = sorted((t for t in tiers if "dc" in t), key=lambda t: t["dc"])
+    if any(not isinstance(t.get("gain"), int) for t in tiers):
+        errs.append("every tier wants an integer gain")
+        return
+    bonus = d.get("bonus", CHALLENGE_BONUS)
+    eg = 0.0
+    for face in range(1, 21):
+        tot, g = face + bonus, 0
+        for t in up:
+            if tot >= t["dc"]:
+                g = t["gain"]
+        for t in tiers:
+            if "under" in t and tot < t["under"]:
+                g = t["gain"]
+        eg += g / 20
+    per = d.get("checks_per_round", d.get("party", 4))
+    if eg <= 0:
+        warns.append(f"expected gain per check is {eg:.2f} at +{bonus}; the party cannot finish on average")
+        return
+    prog, rnd = 0.0, 0
+    while prog < succ and rnd < 50:
+        rnd += 1
+        prog += eg * per
+        for c in comps:
+            hit = c.get("round") == rnd or (isinstance(c.get("every"), int) and c["every"] > 0 and rnd % c["every"] == 0)
+            if hit and prog < succ:
+                prog = max(0.0, prog - (c.get("removes") or 0))
+    print(f"expected rounds at an average roll (+{bonus}, {per} checks a round): "
+          + (str(rnd) if prog >= succ else "over 50") + f"; {eg:.2f} successes a check")
 
 
 TERRAIN = {"road": 1.0, "plains": 0.75, "forest": 0.5, "hills": 0.5, "swamp": 0.35, "mountain": 0.25, "desert": 0.5}
@@ -2402,6 +2474,8 @@ def cmd_chase(a):
     """City pursuit: each round both sides roll d6, the higher moves the lead one step, then a complication shifts it."""
     import random
     rng = random.Random(a.seed)
+    if a.legs:
+        return chase_legs(a, rng)
     comps = CHASE_COMPLICATIONS
     if a.table:
         comps = []
@@ -2641,6 +2715,10 @@ def alert_effect(tier, tiers):
 
 def cmd_alert(a):
     """Dungeon alert track in a JSON file: init --tiers N, raise/lower --why, show."""
+    if a.action == "noise":
+        return alert_noise(a)
+    if a.action == "waves":
+        return alert_waves(a)
     f = Path(a.file)
     if a.action == "init":
         if not 2 <= a.tiers <= 5:
@@ -3145,6 +3223,11 @@ def cmd_rooms(a):
                 errs.append(f"{n}: {k} {v}, use 1 to 6")
         if str(r.get("difficulty", "")).lower() == "hard" and all(v == 1 for v in dials.values()):
             warns.append(f"{n}: hard with every dial at 1; turn up damage, disruption or duration")
+        if r.get("objective") and len(r.get("paths") or []) < 2:
+            warns.append(f"{n}: objective with {len(r.get('paths') or [])} paths; give 2+ ways to reach it")
+        for roll in r.get("rolls") or []:
+            if not roll.get("on_fail"):
+                warns.append(f"{n}: roll {roll.get('skill', '?')} with no on_fail; a failed roll must still move the scene")
         streak = streak + 1 if r.get("enemies") else 0
         if streak == 3:
             warns.append(f"{n}: third room in a row with enemies; give one a breather")
@@ -4407,6 +4490,284 @@ def cmd_realm(a):
     report(errs, warns, f"realm with {len(places)} places")
 
 
+DOOM_ADVANCE = ("encounter", "rest", "switch", "scene")
+DOOM_MAX = 7  # more spaces than this and the track stops feeling close; our number
+
+
+def cmd_doomtrack(a):
+    """Doom track JSON: spaces with an event and a shown_by, scenes with fail_cost and cap, outcomes per solved paths."""
+    import itertools
+    d = load_json(a.file)
+    errs, warns = [], []
+    spaces = d.get("spaces") or []
+    if not spaces:
+        die("no spaces")
+    for i, s in enumerate(spaces, 1):
+        n = s.get("n", i)
+        if not s.get("event"):
+            errs.append(f"space {n}: no event (what happens off-screen when the track lands here)")
+        elif not s.get("shown_by"):
+            warns.append(f"space {n}: no shown_by; show the off-screen event through a messenger or a visible sign")
+    if len(spaces) > DOOM_MAX:
+        warns.append(f"{len(spaces)} spaces; over {DOOM_MAX} the doom feels far off")
+    adv = d.get("advance_on")
+    adv = [adv] if isinstance(adv, str) else (adv or [])
+    if not adv:
+        warns.append("no advance_on: say what moves the track (" + ", ".join(DOOM_ADVANCE) + ")")
+    for x in adv:
+        if x not in DOOM_ADVANCE:
+            errs.append(f"advance_on {x!r}; use " + ", ".join(DOOM_ADVANCE))
+    scenes = d.get("scenes") or []
+    worst = 0
+    for s in scenes[:-1]:
+        cost, cap = s.get("fail_cost"), s.get("cap")
+        if cost and cap is None:
+            warns.append(f"{s.get('name', '?')}: fail_cost {cost} with no cap; a bad run can eat the whole track")
+        worst += cap if isinstance(cap, int) else (cost or 0)
+    if scenes and worst >= len(spaces):
+        warns.append(f"worst case the scenes before {scenes[-1].get('name', 'the last')} cost {worst} spaces of"
+                     f" {len(spaces)}; the party can lose before it reaches the last scene")
+    for st in d.get("states") or []:
+        b = st.get("by_space")
+        if not isinstance(b, int) or not 1 <= b <= len(spaces):
+            errs.append(f"state {st.get('place', '?')}: by_space {b!r}, want 1 to {len(spaces)}")
+    paths, outs = d.get("paths") or [], d.get("outcomes")
+    if outs is not None:
+        if not paths:
+            errs.append("outcomes with no paths: list the problem paths the party can solve")
+        keys = {"+".join(sorted(str(p).strip() for p in k.split("+"))) if k != "none" else "none" for k in outs}
+        for r in range(len(paths) + 1):
+            for combo in itertools.combinations(sorted(paths), r):
+                k = "+".join(combo) or "none"
+                if k not in keys:
+                    errs.append(f"no outcome for solved paths: {k}")
+    elif len(paths) > 1:
+        warns.append(f"{len(paths)} paths and no outcomes; map each mix of solved paths to a finale")
+    report(errs, warns, f"{len(spaces)} spaces, {len(scenes)} scenes, worst-case scene cost {worst}")
+
+
+def cmd_hazard(a):
+    """Multi-problem hazard round JSON: counters rising each round, deadlines, a goal and an order to read them out."""
+    import math
+    d = load_json(a.file)
+    errs, warns = [], []
+    if not d.get("goal"):
+        errs.append("no goal: what the party is trying to save or stop")
+    counters = d.get("counters") or []
+    if len(counters) < 2:
+        warns.append(f"{len(counters)} counters; a hazard round wants 2+ problems pulling the party apart")
+    if not d.get("order"):
+        warns.append("no order: say which counter goes up first each round")
+    for c in counters:
+        n = c.get("name", "?")
+        start, cap, per = c.get("start", 0), c.get("cap"), c.get("per_round", 0)
+        if not isinstance(cap, int):
+            errs.append(f"{n}: no cap (the value at which it is lost)")
+            continue
+        if per and per > 0:
+            rnd = max(1, math.ceil((cap - start) / per))
+            extra = f" (faster if {c['extra_if']})" if c.get("extra_if") else ""
+            print(f"{n}: caps in round {rnd} if nobody acts{extra}")
+            if rnd < 2:
+                warns.append(f"{n}: caps in round {rnd}; the party gets no turn to answer it")
+        else:
+            print(f"{n}: does not rise on its own")
+        if not c.get("lowered_by"):
+            warns.append(f"{n}: no lowered_by; name a PC action that pushes it down")
+    for dl in d.get("deadlines") or []:
+        print(f"deadline round {dl.get('round', '?')}: {dl.get('what', '?')}")
+    report(errs, warns, f"{len(counters)} counters")
+
+
+INTERROGATE_TRUTH = ("true", "half", "believed", "false")
+
+
+def cmd_interrogate(a):
+    """Interrogation ladder JSON: rungs of ascending dc, each with a fact and a truth tag; non-true rungs want real and revealed_at."""
+    d = load_json(a.file)
+    rungs = d.get("rungs", []) if isinstance(d, dict) else d
+    if not rungs:
+        die("no rungs")
+    errs, warns, last = [], [], None
+    for r in rungs:
+        dc, t = r.get("dc"), str(r.get("truth", "")).lower()
+        label = f"DC {dc}"
+        if not isinstance(dc, int):
+            errs.append(f"{label}: dc must be a number")
+        elif last is not None and dc <= last:
+            errs.append(f"{label}: DCs must go up rung by rung (after DC {last})")
+        last = dc if isinstance(dc, int) else last
+        if not r.get("fact"):
+            errs.append(f"{label}: no fact")
+        if t not in INTERROGATE_TRUTH:
+            errs.append(f"{label}: truth {t or 'missing'}; use " + ", ".join(INTERROGATE_TRUTH))
+        elif t != "true":
+            for k, why in (("real", "what is actually so"), ("revealed_at", "where the party learns the real story")):
+                if not r.get(k):
+                    warns.append(f"{label}: {t} with no {k} ({why})")
+    report(errs, warns, f"{len(rungs)} rungs")
+
+
+SITE_SIGNS = 2
+
+
+def cmd_site(a):
+    """Site prep JSON: location, entries, upkeep, ecology, visitors; doors, drops, treasure, rumours; a clock with signs."""
+    d = load_json(a.file)
+    errs, warns = [], []
+    if not d.get("location"):
+        errs.append("no location: where the site is and how the party hears of it")
+    entries = d.get("entries") or []
+    if not entries:
+        errs.append("no entries: how the party gets in")
+    elif len(entries) < 2:
+        warns.append("one entry; give a second way in (or out)")
+    for k, why in (("upkeep", "who keeps the light and order"), ("ecology", "what eats, drinks and sleeps here"),
+                   ("visitors", "who comes and goes")):
+        if not d.get(k):
+            warns.append(f"no {k} ({why})")
+    for x in d.get("doors") or []:
+        if x.get("locked") and not (x.get("lock") and x.get("beyond")):
+            warns.append(f"door {x.get('name', '?')}: locked, wants lock (who holds the key) and beyond (why it is locked)")
+    for x in d.get("drops") or []:
+        if not (x.get("depth") and x.get("bottom")):
+            warns.append(f"drop {x.get('name', '?')}: wants depth and bottom")
+    for x in d.get("treasure") or []:
+        if not x.get("guard"):
+            warns.append(f"treasure {x.get('name', '?')}: no guard")
+    for x in d.get("rumours") or []:
+        if not isinstance(x.get("true"), bool):
+            warns.append(f"rumour {x.get('text', '?')!r}: mark true: true or false")
+    clock = d.get("clock")
+    if clock is not None:
+        turns, signs = clock.get("turns"), clock.get("signs") or []
+        if not isinstance(turns, int) or turns < 1:
+            errs.append(f"clock turns {turns!r}, want 1 or more")
+        else:
+            if len(signs) < SITE_SIGNS:
+                warns.append(f"clock has {len(signs)} signs; give {SITE_SIGNS}+ so the party sees it coming")
+            for s in signs:
+                at = s.get("turn") if isinstance(s, dict) else None
+                if isinstance(at, int) and at >= turns:
+                    warns.append(f"sign at turn {at} is at or past the end ({turns}); a sign must come before it")
+    report(errs, warns, f"site {d.get('location', '?')}, {len(entries)} entries")
+
+
+def cmd_carry(a):
+    """Carry-over foes per named group between fights: next wave is start minus killed; fleers come back as a return wave."""
+    f = Path(a.file)
+    d = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    g = d.get(a.group)
+    if a.start is not None:
+        g = {"start": a.start, "killed": 0, "fled": 0}
+    if g is None:
+        die(f"no group {a.group!r}; set it with --start N")
+    g["killed"] += a.killed
+    g["fled"] += a.fled
+    if g["killed"] + g["fled"] > g["start"]:
+        die(f"{a.group}: killed and fled ({g['killed'] + g['fled']}) exceed the start ({g['start']})")
+    d[a.group] = g
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(d, indent=1), encoding="utf-8")
+    left = g["start"] - g["killed"]
+    print(f"{a.group}: started {g['start']}, killed {g['killed']}, fled {g['fled']}; next wave {left}")
+    if g["fled"]:
+        print(f"  {g['fled']} of them fled: they come back as a return wave, warned")
+
+
+def chase_legs(a, rng):
+    """Legged chase: each PC runs each leg; a failed approach costs a round, an attack or damage; complications pass on."""
+    d = load_json(a.legs)
+    legs = d.get("legs", []) if isinstance(d, dict) else d
+    if not legs:
+        die("no legs")
+    names = [l.get("name") for l in legs]
+    if a.start:
+        if a.start not in names:
+            die(f"--start {a.start!r} is not a leg: " + ", ".join(map(str, names)))
+        legs = legs[names.index(a.start):]
+    totals = []
+    for pc in range(1, a.party + 1):
+        rounds, notes, pending = 0, [], 0
+        for leg in legs:
+            aps = leg.get("approaches") or []
+            if not aps:
+                die(f"leg {leg.get('name')}: no approaches")
+            ap = min(aps, key=lambda x: x.get("dc", 99))
+            rounds += leg.get("rounds", 1)
+            roll = rng.randint(1, 20)
+            ok = roll + a.bonus >= ap.get("dc", 10) + pending
+            pending = 0
+            if not ok:
+                fail = str(ap.get("fail", "round"))
+                if fail == "round":
+                    rounds += 1
+                elif fail == "attack":
+                    notes.append(f"{leg.get('name')}: takes an attack")
+                elif fail.startswith("damage:"):
+                    dice = fail[7:]
+                    try:
+                        n, _, s = dice.partition("d")
+                        dmg = sum(rng.randint(1, int(s)) for _ in range(int(n or 1)))
+                    except ValueError:
+                        die(f"bad fail {fail!r}; use round, attack or damage:XdY")
+                    notes.append(f"{leg.get('name')}: {dmg} damage")
+                if leg.get("complications"):
+                    pending = 2
+                    notes.append(f"{leg.get('name')}: complication passed on (+2 DC to the next check)")
+        totals.append(rounds)
+        print(f"PC {pc}: {rounds} rounds" + ("; " + "; ".join(notes) if notes else ""))
+    print(f"slowest PC: {max(totals)} rounds since the alarm"
+          f" (feed it to: tt.py alert waves --since-alarm {max(totals)} --schedule ...)")
+
+
+def alert_noise(a):
+    """Noise before the alarm: hidden for --quiet rounds, a checker sets off at --check, arrives at --arrive."""
+    if a.quiet is None or a.check is None or a.arrive is None or a.round is None:
+        die("alert noise wants --quiet, --check, --arrive and --round")
+    if not 0 <= a.quiet < a.check <= a.arrive:
+        die("want --quiet < --check <= --arrive")
+    r = a.round
+    if r <= a.quiet:
+        state = f"hidden; {a.check - r} round(s) of noise before someone comes to check"
+    elif r < a.check:
+        state = f"heard; a checker sets off in round {a.check}"
+    elif r < a.arrive:
+        state = f"checker coming; here in round {a.arrive}"
+    else:
+        state = "checker here: bluff them or the alarm goes up (alert raise)"
+    print(f"round {r}: {state}")
+
+
+def alert_waves(a):
+    """What has arrived by --since-alarm R from a 'ROUND:what' schedule; COUNTxFOE entries get XP via plan_waves."""
+    import re
+    from types import SimpleNamespace
+    if a.since_alarm is None or not a.schedule:
+        die("alert waves wants --since-alarm and --schedule 'ROUND:what,...'")
+    items = []
+    for part in a.schedule.split(","):
+        rnd, _, what = part.strip().partition(":")
+        if not rnd.strip().isdigit() or not what.strip():
+            die(f"bad schedule entry {part!r}; write ROUND:what")
+        items.append((int(rnd), what.strip()))
+    items.sort()
+    here = [w for w in items if w[0] <= a.since_alarm]
+    for rnd, what in here:
+        print(f"arrived (round {rnd}): {what}")
+    nxt = [w for w in items if w[0] > a.since_alarm]
+    if nxt:
+        print(f"next: round {nxt[0][0]}: {nxt[0][1]}")
+    if not here:
+        print(f"nothing has arrived by round {a.since_alarm}")
+    counted = [f"{r}:{w}" for r, w in here if re.fullmatch(r"\d+x\S+", w)]
+    if counted and a.level and a.system:
+        ns = SimpleNamespace(wave=counted, prep=None, pool=None, morale="-", smart=False, escape=None,
+                             system=a.system, level=a.level)
+        _, xp, _ = plan_waves(ns)
+        print(f"arrived XP: {xp} (add it to the last fight)")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -4433,6 +4794,7 @@ def main(argv=None):
             s.add_argument("--tactics"); s.add_argument("--fallback"); s.add_argument("--terrain")
             s.add_argument("--spike", type=int, action="append", help="one foe's max burst damage in a turn; repeat per foe")
             s.add_argument("--pc-hp", type=int, help="the lowest PC's full HP, for --spike")
+            s.add_argument("--exit", help="the party's way out of a fight above the top band")
         else:
             s.add_argument("--threat", default="moderate")
         s.add_argument("--json", action="store_true")
@@ -4490,6 +4852,7 @@ def main(argv=None):
     s.add_argument("--die", type=int, help="faces of the die the table is rolled on")
     s.add_argument("--seed", type=int); s.add_argument("--count", type=int, default=6)
     s.add_argument("--dice", help="table check: the dice rolled on it, e.g. 2d10 or d100")
+    s.add_argument("--filter", action="append", help="combine: keep rows where column key=value (blank or any always match)")
     s.set_defaults(fn=cmd_table)
     s = sub.add_parser("mystery", help="check a mystery's clues and suspects")
     s.add_argument("file"); s.set_defaults(fn=cmd_mystery)
@@ -4612,6 +4975,9 @@ def main(argv=None):
     s.add_argument("--lead", type=int, default=3); s.add_argument("--escape", type=int, default=6)
     s.add_argument("--rounds", type=int, default=10); s.add_argument("--table", help="file of 'complication;shift' lines")
     s.add_argument("--grid", type=int, help="progress-track mode: a track this long; each side moves 1-3 a round")
+    s.add_argument("--legs", help="JSON legs [{name, rounds, approaches [{skill, dc, fail}], complications}]")
+    s.add_argument("--start", help="--legs: the leg where the alarm went off"); s.add_argument("--party", type=int, default=4)
+    s.add_argument("--bonus", type=int, default=5, help="--legs: each PC's skill bonus")
     s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_chase)
     s = sub.add_parser("attendance", help="who came and what to do with absent PCs")
     s.add_argument("roster"); s.add_argument("--present", type=int, required=True)
@@ -4629,7 +4995,13 @@ def main(argv=None):
     s.add_argument("--keep-pcs", action="store_true", help="the players want their characters back")
     s.set_defaults(fn=cmd_tpk)
     s = sub.add_parser("alert", help="dungeon alert track")
-    s.add_argument("action", choices=["init", "raise", "lower", "show"])
+    s.add_argument("action", choices=["init", "raise", "lower", "show", "noise", "waves"])
+    s.add_argument("--quiet", type=int, help="noise: rounds of fighting nobody hears")
+    s.add_argument("--check", type=int, help="noise: round a checker sets off"); s.add_argument("--arrive", type=int)
+    s.add_argument("--round", type=int, help="noise: the round now")
+    s.add_argument("--since-alarm", type=int, help="waves: rounds since the alarm")
+    s.add_argument("--schedule", help="waves: 'ROUND:what,...'; COUNTxFOE entries count XP with --system and --level")
+    s.add_argument("--system", choices=["pf2e", "sf2e", "5e"]); s.add_argument("--level", type=int)
     s.add_argument("--tiers", type=int, default=3); s.add_argument("--why"); s.add_argument("--by", type=int, default=1)
     s.add_argument("--merge", action="append", help="init: TIER:group+group that join forces at that tier")
     s.add_argument("--file", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "alert.json"))
@@ -4764,6 +5136,19 @@ def main(argv=None):
     s = sub.add_parser("realm", help="check a kingdom or region card")
     s.add_argument("file"); s.add_argument("--strict", action="store_true", help="warnings fail too")
     s.set_defaults(fn=cmd_realm)
+    s = sub.add_parser("doomtrack", help="check a doom track: spaces with events, scene costs, outcomes per solved paths")
+    s.add_argument("file"); s.set_defaults(fn=cmd_doomtrack)
+    s = sub.add_parser("hazard", help="check a multi-problem hazard round: counters, caps, deadlines, order")
+    s.add_argument("file"); s.set_defaults(fn=cmd_hazard)
+    s = sub.add_parser("site", help="check a site prep card: entries, upkeep, doors, drops, rumours, clock")
+    s.add_argument("file"); s.set_defaults(fn=cmd_site)
+    s = sub.add_parser("interrogate", help="check an interrogation ladder: ascending DCs, truth tags, the real story")
+    s.add_argument("file"); s.set_defaults(fn=cmd_interrogate)
+    s = sub.add_parser("carry", help="carry-over foes per group between fights")
+    s.add_argument("group"); s.add_argument("--start", type=int, help="set the group's size")
+    s.add_argument("--killed", type=int, default=0); s.add_argument("--fled", type=int, default=0)
+    s.add_argument("--file", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "carry.json"))
+    s.set_defaults(fn=cmd_carry)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
