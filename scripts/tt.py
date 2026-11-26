@@ -37,6 +37,14 @@ Commands:
   hack        hacking difficulty from system and modifiers
   settlement  check a settlement card (size band, civic kit, function)
   favor       seeded favor request by relation and risk
+  xp          foe and story XP award split among survivors
+  morale      2d10 morale check against a modified rating
+  awards      per-player awards, milestones and coins across session logs
+  rooms       check rooms (timer, threat, treat, stake, wonder, dials)
+  session-end rounds left and final turns in seat order
+  resize      add or cut foes for a different party size
+  target      pick a monster's target (marked, threat, reach, roll)
+  playtest    check a blind playtest log
   licence     notices for the bundled rules tables
 
 Exit 2 is a usage or validation error.
@@ -333,6 +341,8 @@ def show(d, public=False):
         state = " DOWN" if c["hp"] <= 0 else ""
         hp = f"took {c['max_hp'] - c['hp']}" if public else f"{c['hp']}/{c['max_hp']}"
         print(f"{mark} {c['init']:>3} {c['name']:<16} {hp}{state}{conds}")
+    for c in d.get("clocks", []):
+        print(f"clock {c['name']}: {c['left']} {c['unit']}(s) left")
 
 
 def tick_effects(d):
@@ -348,6 +358,21 @@ def tick_effects(d):
                 print(f"{c['name']}: {e['name']} ended")
         if "effects" in c:
             c["effects"] = keep
+
+
+def tick_clocks(d, unit):
+    """unit turn or round: those clocks lose one; None only reports. A clock at 0 fires and is removed."""
+    keep = []
+    for c in d.get("clocks", []):
+        if unit and c["unit"] == unit:
+            c["left"] -= 1
+        if c["left"] <= 0:
+            d["log"].append(f"r{d['round']} clock {c['name']} fires")
+            print(f"clock {c['name']} fires")
+        else:
+            keep.append(c)
+    if "clocks" in d:
+        d["clocks"] = keep
 
 
 def cmd_tracker(a):
@@ -393,9 +418,28 @@ def cmd_tracker(a):
                 if i >= len(d["order"]):
                     i, d["round"] = 0, d["round"] + 1
                     tick_effects(d)
+                    tick_clocks(d, "round")
                 if d["order"][i]["hp"] > 0:
                     break
             d["turn"] = i
+            tick_clocks(d, "turn")
+        elif a.action == "clock":
+            if a.args and a.args[0] == "tick":
+                names = a.args[1:] or [c["name"] for c in d.get("clocks", [])]
+                for n in names:
+                    c = next((c for c in d.get("clocks", []) if c["name"].lower() == n.lower()), None)
+                    if not c:
+                        die(f"no clock named {n}")
+                    c["left"] -= 2 if a.fail else 1
+                tick_clocks(d, None)
+            elif len(a.args) == 2:
+                try:
+                    n = int(a.args[1])
+                except ValueError:
+                    die("clock NAME N")
+                d.setdefault("clocks", []).append({"name": a.args[0], "left": n, "unit": a.unit})
+            else:
+                die("clock NAME N --unit turn|round, or clock tick [NAME] [--fail]")
         elif a.action == "cond":
             if len(a.args) < 2:
                 die("cond NAME CONDITION [--remove]")
@@ -661,6 +705,18 @@ def cmd_prep(a):
             warns.append("dungeon card with no ## Rest: say where the party can rest (where:) and what it costs (cost:)")
         elif not any("where:" in r.lower() for r in rest) or not any("cost:" in r.lower() for r in rest):
             warns.append("## Rest wants a where: line and a cost: line (a clock, an alarm or a spent resource)")
+    if a.hours:
+        rate = 0.75 if a.learning else 1.0
+        if len(fights) > a.hours * rate:
+            warns.append(f"{len(fights)} fights in {a.hours:g} h; about {rate:g} an hour fits (our default, from 4e grid play)")
+    if a.first:
+        for k in ("prologue", "intros"):
+            if not sec.get(k):
+                errs.append(f"first session with no ## {k.title()}")
+        if not any("bond:" in l.lower() for l in sec.get("intros", [])):
+            errs.append("first session: no bond: line in ## Intros (why these PCs travel together)")
+    elif a.hours and not sec.get("recap"):
+        warns.append("no ## Recap: open a later session with what happened last time")
     false = [l for l in leads if "(false)" in l.lower()]
     if false and len(false) >= len(leads) - len(false):
         warns.append(f"{len(false)} false leads of {len(leads)}; keep them fewer than the real ones")
@@ -1479,7 +1535,17 @@ def cmd_loot(a):
             why = f"fewest permanent items ({low})" + (f", won a roll among {len(tied)}" if len(tied) > 1 else "")
         count[who] += 1
         print(f"{n}: {who} ({why})")
-    report(errs, [], "loot split")
+    warns = []
+    own = d.get("owner")
+    if own:
+        use = {str(x).lower() for x in own.get("can_use", [])}
+        for it in d.get("items", []):
+            n = it.get("name", "?")
+            if own.get("intelligent") and (n.lower() in use or it.get("usable")):
+                warns.append(f"{n}: an intelligent owner would use it, not leave it in the hoard")
+            if not own.get("intelligent") and own.get("random") and it.get("magic"):
+                warns.append(f"{n}: a random unintelligent monster carrying a magic item; put it in a lair instead")
+    report(errs, warns, "loot split")
 
 
 REACTION_BANDS = [(3, "hostile"), (6, "wary"), (9, "neutral"), (11, "open"), (99, "helpful")]
@@ -2447,6 +2513,258 @@ def cmd_favor(a):
         print(f"d100 {roll} vs {chance}: granted, a {rng.choice(sizes)} favor; you owe one back")
 
 
+# ---------- 0.14.0 ----------
+
+XP_OUTCOMES = ("killed", "surrendered", "routed", "persuaded")
+STORY_CAP = 10  # our default: a story award above 1/10 of any PC's xp_to_next is too big
+
+
+def cmd_xp(a):
+    """XP JSON {party: [{name, level, xp_to_next, alive}], foes: [{name, xp, faced, overmatched, outcome, group}], story}."""
+    d = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    party, foes = d.get("party", []), d.get("foes", [])
+    if not party:
+        die("xp needs party")
+    errs, seen, total = [], set(), 0
+    for f in foes:
+        n = f.get("name", "?")
+        out = str(f.get("outcome", "")).lower()
+        if out not in XP_OUTCOMES:
+            errs.append(f"{n}: outcome {out or 'missing'}, use " + ", ".join(XP_OUTCOMES))
+            continue
+        if not f.get("faced", True):
+            print(f"{n}: not faced, 0 XP")
+            continue
+        if f.get("overmatched"):
+            print(f"{n}: overmatched (no real risk), 0 XP")
+            continue
+        g = f.get("group")
+        if out == "routed" and g is not None:
+            if g in seen:
+                print(f"{n}: routed group {g} already counted")
+                continue
+            seen.add(g)
+        total += int(f.get("xp", 0))
+    story = int(d.get("story", 0))
+    if story > total:
+        errs.append(f"story award {story} is more than the foe XP {total}")
+    for p in party:
+        cap = int(p.get("xp_to_next", 0)) // STORY_CAP
+        if story > cap:
+            errs.append(f"story award {story} is over 1/{STORY_CAP} of {p.get('name', '?')}'s xp_to_next ({cap})")
+    alive = [p["name"] for p in party if p.get("alive", True)]
+    if not alive:
+        errs.append("no survivors to split among")
+    if errs:
+        return report(errs, [], "")
+    share, rest = divmod(total + story, len(alive))
+    print(f"foe XP {total} + story {story} = {total + story}: {share} each to " + ", ".join(alive)
+          + (f" ({rest} left over)" if rest else ""))
+    report([], [], "xp award")
+
+
+def cmd_morale(a):
+    """2d10 against the rating plus modifiers; a roll over the modified rating breaks."""
+    import random
+    mod = 0
+    for m in a.mod or []:
+        k, _, v = m.partition("=")
+        try:
+            mod += int(v)
+        except ValueError:
+            die(f"--mod NAME=V, got {m}")
+        print(f"{k}: {int(v):+d}")
+    target = a.rating + mod
+    roll = a.roll
+    if roll is None:
+        rng = random.Random(a.seed)
+        roll = rng.randint(1, 10) + rng.randint(1, 10)
+    print(f"2d10 {roll} vs {target}: " + ("breaks (flee or surrender)" if roll > target else "holds"))
+
+
+COIN_CAP = 5  # our default: more coins than this in one session is generous
+
+
+def cmd_awards(a):
+    """Session logs (oldest first): 'award: player | kind | ability | reason | xp', 'milestone: player', 'coins: player N'."""
+    errs, warns, last, players = [], [], [], set()
+    for path in a.logs:
+        seen, ms, coins = {}, set(), {}
+        for ln in Path(path).read_text(encoding="utf-8").splitlines():
+            k, _, v = ln.strip().lstrip("-* ").partition(":")
+            k = k.strip().lower()
+            if k == "award":
+                f = [x.strip() for x in v.split("|")] + [""] * 5
+                pl, kind, ab, reason, xp = f[:5]
+                players.add(pl)
+                if not reason:
+                    errs.append(f"{path}: award to {pl} has no reason")
+                if ab:
+                    key = (pl, ab.lower())
+                    seen[key] = seen.get(key, 0) + 1
+                    if seen[key] == 2:
+                        warns.append(f"{path}: {pl} got {ab} awarded twice this session; reward something new")
+                print(" ".join(x for x in (f"{pl}:", kind or "award", ab, xp, f"({reason or 'no reason'})") if x))
+            elif k == "milestone":
+                pl = v.strip()
+                players.add(pl)
+                ms.add(pl)
+            elif k == "coins":
+                pl, _, n = v.strip().rpartition(" ")
+                pl = pl.strip()
+                players.add(pl)
+                try:
+                    coins[pl] = coins.get(pl, 0) + int(n)
+                except ValueError:
+                    errs.append(f"{path}: coins line wants 'player N': {ln.strip()}")
+        for pl, n in coins.items():
+            if n > COIN_CAP:
+                warns.append(f"{path}: {pl} got {n} coins in one session (over {COIN_CAP}, our default)")
+        last.append(ms)
+    if len(last) >= 3:
+        recent = set().union(*last[-3:])
+        for pl in sorted(players - recent):
+            warns.append(f"{pl}: no milestone in the last 3 logs")
+    report(errs, warns, f"{len(a.logs)} log(s), {len(players)} player(s)")
+
+
+ROOM_KEYS = ("timer", "threat", "treat")  # the same tags prep's fight check reads
+
+
+def cmd_rooms(a):
+    """Rooms JSON {rooms: [{name, timer, threat, treat, stake, wonder, enemies, difficulty, damage, disruption, duration}]}."""
+    rooms = load_list(a.file, "rooms")
+    errs, warns = [], []
+    if not 2 <= len(rooms) <= 4:
+        warns.append(f"{len(rooms)} rooms; 2 to 4 keeps a session moving (our default)")
+    streak = 0
+    for r in rooms:
+        n = r.get("name", "?")
+        miss = [k for k in ROOM_KEYS if not r.get(k)]
+        if miss:
+            errs.append(f"{n}: no " + ", ".join(miss))
+        for k in ("stake", "wonder"):
+            if not r.get(k):
+                warns.append(f"{n}: no {k}")
+        dials = {k: r.get(k, 1) for k in LEVERS}
+        for k, v in dials.items():
+            if not isinstance(v, int) or not 1 <= v <= 6:
+                errs.append(f"{n}: {k} {v}, use 1 to 6")
+        if str(r.get("difficulty", "")).lower() == "hard" and all(v == 1 for v in dials.values()):
+            warns.append(f"{n}: hard with every dial at 1; turn up damage, disruption or duration")
+        streak = streak + 1 if r.get("enemies") else 0
+        if streak == 3:
+            warns.append(f"{n}: third room in a row with enemies; give one a breather")
+    report(errs, warns, f"{len(rooms)} rooms")
+
+
+def cmd_session_end(a):
+    """Roll the rounds left (rerolling dropped values) and list the final turns in seat order."""
+    import random
+    rng = random.Random(a.seed)
+    drop = set(a.drop or [])
+    if set(range(1, a.die + 1)) <= drop:
+        die("every face is dropped")
+    while True:
+        r = rng.randint(1, a.die)
+        if r not in drop:
+            break
+    players = [p.strip() for p in a.players.split(",") if p.strip()]
+    print(f"d{a.die} {r}: {r} round(s) left")
+    print("final turns: " + ", ".join(players))
+
+
+ADD_FIRST = ("brute", "soldier")
+CUT_FIRST = ("controller", "skirmisher")
+
+
+def cmd_resize(a):
+    """Resize an encounter to a new party size: one foe per PC of difference."""
+    foes = [(f.partition(":")[0], f.partition(":")[2].lower()) for f in a.foe]
+
+    def xp(fs, party):
+        tot = sum(foe_xp(a.system, lv, a.level)[0] or 0 for lv, _ in fs)
+        b = dnd_budgets(party, a.level) if a.system == "5e" else pf_budgets(party)
+        return tot, band_for(tot, b)
+
+    before = xp(foes, a.party)
+    new = list(foes)
+    diff = a.to - a.party
+    if diff < 0:
+        if len(foes) == 1 and foes[0][1] == "solo":
+            die("a lone solo cannot lose a foe; lower its level instead")
+        for _ in range(-diff):
+            if len(new) <= 1:
+                print("one foe left; lower its level instead")
+                break
+            idx = next((i for i, f in enumerate(new) if f[1] in CUT_FIRST), len(new) - 1)
+            print(f"cut: level {new[idx][0]} {new[idx][1] or 'foe'}")
+            new.pop(idx)
+    else:
+        lv = sorted(foes, key=lambda f: float(eval_cr(f[0])))[len(foes) // 2][0]
+        for i in range(diff):
+            role = ADD_FIRST[i % 2]
+            print(f"add: level {lv} {role}")
+            new.append((lv, role))
+    after = xp(new, a.to)
+    print(f"before: {a.party} PCs, {before[0]} XP, {before[1]}")
+    print(f"after: {a.to} PCs, {after[0]} XP, {after[1]}")
+
+
+def eval_cr(x):
+    n, _, d = x.partition("/")
+    try:
+        return float(n) / float(d) if d else float(n)
+    except ValueError:
+        die(f"foe level must be a number: {x}")
+
+
+def cmd_target(a):
+    """Target JSON {pcs: [{name, marked, threat, reach}]}: marked first, then (--smart) threat, then reach, then a roll."""
+    import random
+    pcs = load_list(a.file, "pcs")
+    rng = random.Random(a.seed)
+    marked = [p for p in pcs if p.get("marked")]
+    pick, why = (marked, "marked it") if marked else (pcs, "")
+    if not marked and a.smart:
+        top = max(int(p.get("threat", 0)) for p in pick)
+        pick = [p for p in pick if int(p.get("threat", 0)) == top]
+        why = "clearest threat"
+    if len(pick) > 1:
+        near = min(int(p.get("reach", 0)) for p in pick)
+        pick = [p for p in pick if int(p.get("reach", 0)) == near]
+        why = "easiest to reach"
+    if len(pick) > 1:
+        t = rng.choice(pick)
+        print(f"target: {t['name']} (tie among {', '.join(p['name'] for p in pick)}, rolled)")
+    else:
+        print(f"target: {pick[0]['name']} ({why})")
+
+
+PLAYTEST_DEBRIEF = ("fun", "trouble", "improvements")
+
+
+def cmd_playtest(a):
+    """Blind playtest JSON {new_group, questions: [{text, answered, section}], debrief: {fun, trouble, improvements}, player_counts}."""
+    d = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    errs = []
+    if not d.get("new_group"):
+        errs.append("not a new group; a blind test needs players who never saw the game")
+    for q in d.get("questions", []):
+        t = q.get("text", "?")
+        if q.get("answered"):
+            errs.append(f"observer answered a question: {t}")
+        if not q.get("section"):
+            errs.append(f"question with no rule section: {t}")
+    for k in PLAYTEST_DEBRIEF:
+        if not d.get("debrief", {}).get(k):
+            errs.append(f"debrief has no {k}")
+    if not d.get("player_counts"):
+        errs.append("no player_counts")
+    report(errs, [], f"{len(d.get('questions', []))} question(s) logged")
+
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -2472,7 +2790,9 @@ def main(argv=None):
         s.add_argument("--json", action="store_true")
         s.set_defaults(fn=fn)
     t = sub.add_parser("tracker", help="initiative and HP tracker")
-    t.add_argument("action", choices=["init", "add", "hit", "heal", "next", "late", "cond", "effect", "show"])
+    t.add_argument("action", choices=["init", "add", "hit", "heal", "next", "late", "cond", "effect", "clock", "show"])
+    t.add_argument("--unit", choices=["turn", "round"], default="round", help="clock: ticks on each next or at the round wrap")
+    t.add_argument("--fail", action="store_true", help="clock tick: a failure ticks one extra")
     t.add_argument("--timer", type=int, help="init: seconds per player turn; 'late' delays whoever runs out")
     t.add_argument("args", nargs="*")
     t.add_argument("--file", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "tracker.json"))
@@ -2484,7 +2804,11 @@ def main(argv=None):
     s = sub.add_parser("check", help="check a character JSON")
     s.add_argument("character"); s.set_defaults(fn=cmd_check)
     s = sub.add_parser("prep", help="check a session prep card")
-    s.add_argument("card"); s.add_argument("--leads", type=int, default=3); s.set_defaults(fn=cmd_prep)
+    s.add_argument("card"); s.add_argument("--leads", type=int, default=3)
+    s.add_argument("--hours", type=float, help="session length; warns on more fights than fit (1 an hour, a 4e-grid number)")
+    s.add_argument("--learning", action="store_true", help="new players: 0.75 fights an hour")
+    s.add_argument("--first", action="store_true", help="first session: needs ## Prologue, ## Intros and bond: lines")
+    s.set_defaults(fn=cmd_prep)
     s = sub.add_parser("combat-log", help="turn times of a real fight from a CSV log")
     s.add_argument("log"); s.add_argument("--budget", type=float, default=90); s.add_argument("--gm", default="GM")
     s.set_defaults(fn=cmd_combatlog)
@@ -2643,6 +2967,29 @@ def main(argv=None):
     s.add_argument("--relation", choices=list(FAVOR_BASE), required=True)
     s.add_argument("--risk", choices=list(FAVOR_RISK), required=True); s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_favor)
+    s = sub.add_parser("xp", help="story and foe XP award, split among survivors")
+    s.add_argument("file"); s.set_defaults(fn=cmd_xp)
+    s = sub.add_parser("morale", help="2d10 morale check against a modified rating")
+    s.add_argument("--rating", type=int, required=True); s.add_argument("--mod", action="append", help="NAME=V")
+    s.add_argument("--seed", type=int); s.add_argument("--roll", type=int); s.set_defaults(fn=cmd_morale)
+    s = sub.add_parser("awards", help="check per-player awards, milestones and coins in session logs")
+    s.add_argument("logs", nargs="+"); s.set_defaults(fn=cmd_awards)
+    s = sub.add_parser("rooms", help="check rooms: timer, threat, treat, stake, wonder, dials")
+    s.add_argument("file"); s.set_defaults(fn=cmd_rooms)
+    s = sub.add_parser("session-end", help="rounds left and the final turns")
+    s.add_argument("--seed", type=int); s.add_argument("--die", type=int, default=6)
+    s.add_argument("--drop", type=int, action="append"); s.add_argument("--players", required=True)
+    s.set_defaults(fn=cmd_session_end)
+    s = sub.add_parser("resize", help="resize an encounter for a different party size")
+    s.add_argument("--system", choices=["pf2e", "sf2e", "5e"], default="pf2e")
+    s.add_argument("--level", type=int, required=True); s.add_argument("--party", type=int, required=True)
+    s.add_argument("--foe", action="append", required=True, help="LVL[:role]"); s.add_argument("--to", type=int, required=True)
+    s.set_defaults(fn=cmd_resize)
+    s = sub.add_parser("target", help="pick a monster's target")
+    s.add_argument("file"); s.add_argument("--seed", type=int); s.add_argument("--smart", action="store_true")
+    s.set_defaults(fn=cmd_target)
+    s = sub.add_parser("playtest", help="check a blind playtest log")
+    s.add_argument("file"); s.set_defaults(fn=cmd_playtest)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)

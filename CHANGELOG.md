@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.14.0 (2026-11-26)
+- `tt.py xp FILE.json`: counts only faced foes that were not overmatched, with outcome killed, surrendered, routed or persuaded; a routed `group` counts once; fails when the `story` award tops the foe XP or 1/10 of any PC's `xp_to_next` (our cap); splits among survivors. Idea from the AD&D 2e Dungeon Master's Guide (TSR), pp. 101-103.
+- `tt.py morale --rating N --mod NAME=V --seed S [--roll R]`: 2d10 against the modified rating; over it breaks. No `morale` command existed (0.8.0 only added `encounter --morale`). Idea from the 2e DMG, pp. 154-155.
+- `tt.py awards LOGS...`: `award: player | kind | ability | reason | xp`, `milestone: player`, `coins: player N` lines; fails an award with no reason; warns the same ability twice in a session, a player with no milestone in the last 3 logs, more than 5 coins in a session (our cap). Idea from the 2e DMG, pp. 104-105, and ICRPG 2e Core (Runehammer), p. 79.
+- `tt.py loot`: an optional `owner` {`intelligent`, `can_use`, `random`} warns when an intelligent owner leaves an item it could use (`can_use` names or `usable`) in its hoard, and when a random unintelligent monster carries a `magic` item. Idea from the 2e DMG, pp. 181-182.
+- `tt.py rooms FILE.json`: each room needs timer, threat and treat (the tags prep reads on fights); warns outside 2-4 rooms, on no stake or wonder, on a third enemy room in a row, and on a hard room with damage, disruption and duration (1-6, prep's lever names) all at 1. Idea from ICRPG 2e Core, pp. 84-92.
+- `tt.py tracker clock NAME N --unit turn|round` and `tracker clock tick [NAME] [--fail]`: turn clocks tick on each `next`, round clocks at the round wrap, a failed tick takes 2, and a clock at 0 prints "fires". Idea from ICRPG 2e Core, pp. 78 and 85.
+- `tt.py session-end --seed S --die 6 --drop 1 --players A,B,C`: rounds left (dropped faces rerolled) and the final turns in seat order. Idea from ICRPG 2e Core, p. 75.
+- `tt.py resize --level L --party N --foe LVL[:role]... --to M [--system]`: one foe per PC of difference, adding brutes then soldiers, cutting controllers and skirmishers first; refuses to cut a lone solo; prints XP and band before and after with the existing budget code. Idea from 4e D&D For Dummies (Wiley), pp. 85-87.
+- `tt.py target FILE.json --seed N [--smart]`: the PC that marked the monster, then (with `--smart`) the clearest threat, then the easiest reach, then a seeded roll. Idea from 4e D&D For Dummies, pp. 137-138.
+- `tt.py prep --hours H [--learning] [--first]`: warns on more fights than 1 an hour (0.75 with `--learning`; our default from 4e grid play); `--first` needs `## Prologue`, `## Intros` and a `bond:` line, and a later session with `--hours` wants `## Recap`. Idea from 4e D&D For Dummies, pp. 35-37 and 84.
+- `tt.py playtest FILE.json`: a blind test needs a new group, an observer who answered no questions, a rule section on each question, a debrief with fun, trouble and improvements, and player counts. Idea from the Kobold Guide to Board Game Design (Kobold Press), pp. 89-90 and 118.
+- 10 new tests; all caps and rates are ours and unverified.
+
 ## 0.13.0 (2026-11-26)
 - `tt.py spell cost --tier 1-4 --power 1-4 [--mastered]`: cost is tier times power, capped at 16; mastered halves it (round down, floor 1); out-of-range values exit 2. Idea from ICRPG Magic (Runehammer), pp. 19 and 21.
 - `tt.py spell check FILE.json`: homebrew spells (`tier`, `targets`, `range`, `duration`, `school`, `created`) against our own per-tier caps (`SPELL_CAPS` in tt.py), a creation cooldown (tier II a day, III a week, IV 30 days) and a learn cap (tier up to the spells known in that school, 4 at most). Idea from ICRPG Magic, pp. 19 and 23-24.
