@@ -113,3 +113,45 @@ def test_fiveroom_flags_gaps():
     assert r.returncode == 1
     for s in ("out of order", "at least 2 solutions", "costs nothing", "needs a lever", "same mode"):
         assert s in r.stdout, s
+
+
+def test_world_ok():
+    r = run("world", FX / "world_ok.md")
+    assert r.returncode == 0 and "6 traits" in r.stdout
+
+
+def test_world_flags_gaps():
+    r = run("world", FX / "world_bad.md")
+    assert r.returncode == 1 and "want 6 to 8" in r.stdout and "not tied" in r.stdout
+
+
+def test_tracker_public_hides_hp(tmp_path):
+    f = tmp_path / "t.json"
+    run("tracker", "init", "Ogre:12:30", "Ana:15:20", "--file", f)
+    run("tracker", "hit", "Ogre", "7", "--file", f)
+    r = run("tracker", "show", "--public", "--file", f)
+    assert "took 7" in r.stdout and "23/30" not in r.stdout and "/20" not in r.stdout
+
+
+def test_combat_log_flags_slow_player():
+    r = run("combat-log", FX / "combat_log.csv")
+    assert r.returncode == 0 and "over 90s a turn: Bo" in r.stdout and "GM share 22%" in r.stdout
+
+
+def test_tracker_shows_on_deck(tmp_path):
+    f = tmp_path / "t.json"
+    run("tracker", "init", "A:20:5", "B:15:5", "C:10:5", "--file", f)
+    run("tracker", "hit", "B", "9", "--file", f)
+    lines = run("tracker", "show", "--file", f).stdout.splitlines()
+    assert lines[1].startswith(">") and lines[3].startswith("+")
+
+
+def test_threads_latest_first_and_finale():
+    r = run("threads", FX / "threads.md")
+    assert r.returncode == 0 and "1 paid, 2 open" in r.stdout and "the bell tower fire; the stranger" in r.stdout
+    assert run("threads", FX / "threads.md", "--finale").returncode == 1
+
+
+def test_npc_cards():
+    r = run("npcs", FX / "npcs.md")
+    assert r.returncode == 1 and "Tov: want three parts" in r.stdout and "Ilse: hook has no why" in r.stdout and "Mera" not in r.stdout
