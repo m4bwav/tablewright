@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.16.0 (2026-11-26)
+- `tt.py variant FILE.json`: monster variant cards (base, axis, keeps, tell, counter, role); fails with no base or axis, control or damage over time with no counter, a changed damage type or immunity with no tell; warns on more than one axis. Idea from New Twists on Old Monsters, pp. 2-8.
+- `tt.py template --cr CR --delta N | --scale X [--template NAME...]`: steps the 5e CR ladder (1/8, 1/4, 1/2 included) or scales and rounds up, prints the new XP, exits 1 below 0, warns on stacked templates. Idea from the Tome of Templates. CR XP values are the SRD ones already bundled.
+- `tt.py poison FILE.json` (delivery, save, interval, onset, stages; warns with no end condition or a DC outside 10-20) and `tracker poison NAME POISON a,b,c [ROUNDS]` (staged ticks, `poison cure`). Idea from a poisons supplement, pp. 2-4.
+- `tt.py portal FILE.json` (location, destination, key, direction, timing; one-way or intermittent needs a return unless `strand: intended`) and `tracker countdown NAME dN --owner C` (a die turned down on its owner's turn). Idea from the Manual of the Planes, pp. 16-18 and 65-66.
+- `tt.py short FILE.json`: one site at several tiers, XP and threat per tier, warns when the cache does not grow. `trap --full` also wants avoid, reset and alarm. Idea from an adventure shorts collection.
+- `tt.py vote FILE.json [--odds]`: council roll call with hidden support, margin added to a d20, odds by simulation, warns with no undecided faction; `chase --grid N` is a progress-track chase. Idea from Trail of Tyranny, pp. 11-13 and 33-35.
+- `encounter --solo` warns without `--tactics`, `--fallback`, `--terrain`; `tt.py hoard FILE.json` wants 3-5 parcels, a magic item and 3+ treasure types. Idea from the Draconomicon (chromatic dragons), pp. 47 and 61-62.
+- `challenge`: per-skill `max`, `requires` gates, `assist` skills that score no success, `outcomes` by successes reached; fails when the caps cannot reach the target, warns when one uncapped skill can finish alone. `encounter` warns over 12 foes with no `--wave` (waves of about 8 with a breather) and `--throng COUNTxFOE` counts weak foes as one crowd. Trap `kind: haunt` needs a second detection route, a non-thievery disable, an anchor and `rearm` leave|rest|never. Ideas from Open Grave, pp. 26-32.
+- All thresholds are ours; no book text or tables copied. 12 new tests (150 total).
+
 ## 0.15.0 (2026-11-26)
 - `tt.py travel --watches N [--day-odds] [--watch-odds] [--no-fire]`: a day roll with a time slot, one check per night watch, a cold camp adding odds, weather checks every 4 hours, and the chance of at least one night event. Idea from a wilderness encounters supplement (pp. 2-3).
 - `tt.py weather FILE.json`: user weather states with a change chance per check, effect flags, and encounters to reroll when `implausible_in` the current state. Same source, p. 3.

@@ -1,6 +1,6 @@
 # tablewright handoff
 
-Updated 2026-11-26. Current release 0.15.0 (weather, unit, command, march, supply, siege, upkeep, forage, craft, identify, sell; travel --watches, table check/lint, encounter --count-foe, morale --break/--dice 2d6, battle --resolve; wilderness encounters, Domains at War battles and campaigns, herbalism), merged and tagged. Chain: plugin-backlog/ai-docs/five-wrights/HANDOFF.md.
+Updated 2026-11-26. Current release 0.16.0 (variant, template, poison, portal, short, vote, hoard; tracker poison/countdown, encounter --solo/--throng/horde warning, chase --grid, trap --full and haunts, challenge caps), merged and tagged. Chain: plugin-backlog/ai-docs/five-wrights/HANDOFF.md.
 
 Done: research, tt.py (encounter, budget, tracker, sheet, check, licence), 11 tests, hub skill, references, furniture.
 Next: wiki (first page needs the browser), three eval runs per case and the trigger cases.
