@@ -1,6 +1,6 @@
 {"areas": [
  {"role": "entrance", "mode": "fight", "minutes": 30},
- {"role": "puzzle", "mode": "talk", "solutions": ["bribe the guard", "climb the wall"], "clue_in": 1, "minutes": 30},
+ {"role": "puzzle", "mode": "talk", "solutions": ["bribe the guard", "climb the wall"], "clue_in": 1, "fail_cost": "the alarm sounds", "minutes": 30},
  {"role": "setback", "cost": "the torches go out", "minutes": 30},
  {"role": "climax", "lever": "collapse the bridge", "terrain": "narrow bridge over a chasm", "minutes": 45},
  {"role": "reward", "twist": "the relic is a fake", "minutes": 15}
