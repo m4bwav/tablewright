@@ -7,6 +7,12 @@ Commands:
   tracker     initiative and HP tracker kept in a JSON file
   sheet       character JSON (common schema) to a one-page markdown sheet
   check       check a character JSON against the common schema
+  prep        check a session prep card (opening, leads, NPC goals, fight exits)
+  combat-log  turn times of a real fight, flags players over 90 s a turn
+  threads     story promises still open, latest first; --finale fails on any open
+  npcs        check three-line NPC cards (look; doing now; hook because why)
+  world       check a setting card (6 to 8 traits, each anchored)
+  fiveroom    check an adventure plan against the five-role arc
   licence     notices for the bundled rules tables
 
 Exit 2 is a usage or validation error.
@@ -178,13 +184,17 @@ def find(d, name):
     die(f"no combatant named {name}")
 
 
-def show(d):
+def show(d, public=False):
+    """Print the order. public: the players' board, damage taken but never HP or HP max."""
     print(f"round {d['round']}")
+    up = [i for i, c in enumerate(d["order"]) if c["hp"] > 0 and i != d["turn"]]
+    deck = next((i for i in up if i > d["turn"]), up[0] if up else None)
     for i, c in enumerate(d["order"]):
-        mark = ">" if i == d["turn"] else " "
+        mark = ">" if i == d["turn"] else ("+" if i == deck else " ")
         conds = (" [" + ", ".join(c["conditions"]) + "]") if c["conditions"] else ""
         state = " DOWN" if c["hp"] <= 0 else ""
-        print(f"{mark} {c['init']:>3} {c['name']:<16} {c['hp']}/{c['max_hp']}{state}{conds}")
+        hp = f"took {c['max_hp'] - c['hp']}" if public else f"{c['hp']}/{c['max_hp']}"
+        print(f"{mark} {c['init']:>3} {c['name']:<16} {hp}{state}{conds}")
 
 
 def cmd_tracker(a):
@@ -243,7 +253,35 @@ def cmd_tracker(a):
             d["turn"] = d["order"].index(cur)
     if a.action != "show":
         tsave(p, d)
-    show(d)
+    show(d, a.public)
+
+
+def cmd_combatlog(a):
+    """Time a real fight: CSV rows actor,start,end in seconds (round,actor,start,end also works)."""
+    import csv, statistics
+    turns = {}
+    rows = list(csv.reader(Path(a.log).read_text(encoding="utf-8").splitlines()))
+    rows = [r for r in rows if r and not r[0].strip().lower() in ("actor", "round")]
+    if not rows:
+        die("no turns in log")
+    for r in rows:
+        try:
+            actor, start, end = r[-3].strip(), float(r[-2]), float(r[-1])
+        except (ValueError, IndexError):
+            die(f"row as actor,start,end: {','.join(r)}")
+        turns.setdefault(actor, []).append(end - start)
+    total = max(float(r[-1]) for r in rows) - min(float(r[-2]) for r in rows)
+    gm = sum(turns.get(a.gm, []))
+    print(f"fight {total / 60:.1f} min, {sum(map(len, turns.values()))} turns, GM share {gm / total:.0%}" if total else "fight 0 min")
+    slow = []
+    for actor, ts in sorted(turns.items(), key=lambda kv: -statistics.median(kv[1])):
+        med = statistics.median(ts)
+        flag = " SLOW" if med > a.budget and actor != a.gm else ""
+        if flag:
+            slow.append(actor)
+        print(f"  {actor:<16} median {med:>5.0f}s  longest {max(ts):>5.0f}s  turns {len(ts)}{flag}")
+    if slow:
+        print(f"over {a.budget:.0f}s a turn: {', '.join(slow)}")
 
 
 # ---------- character ----------
@@ -351,6 +389,60 @@ def cmd_prep(a):
     print(f"ok: opening, {len(leads)} leads, {len(npcs)} NPCs with goals")
 
 
+def cmd_world(a):
+    """Check a setting card: 6 to 8 traits, each tied to a place, NPC or faction the players can meet."""
+    sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
+    traits = [l[2:].strip() for l in sec.get("traits", []) if l[:2] in ("- ", "* ")]
+    errs = []
+    if not 6 <= len(traits) <= 8:
+        errs.append(f"## Traits has {len(traits)}, want 6 to 8: enough to feel distinct, few enough to remember")
+    for t in traits:
+        if ":" not in t or not t.split(":", 1)[1].strip():
+            errs.append(f"trait not tied to a place, NPC or faction (write 'trait: where it shows'): {t}")
+    for e in errs:
+        print("error: " + e)
+    if errs:
+        sys.exit(1)
+    print(f"ok: {len(traits)} traits, each with an anchor")
+
+
+def cmd_threads(a):
+    """Promises and planted objects: '- thread: open' or '- thread: paid'. --finale fails on any still open."""
+    sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
+    th = [l[2:].strip() for l in sec.get("threads", []) if l[:2] in ("- ", "* ")]
+    if not th:
+        die("no ## Threads bullets")
+    opened = [t.rsplit(":", 1)[0].strip() for t in th if t.rsplit(":", 1)[-1].strip().lower() != "paid"]
+    print(f"{len(th) - len(opened)} paid, {len(opened)} open")
+    if opened:
+        # Bring threads back roughly in reverse order: the latest promise pays off first.
+        print("pay off next (latest first): " + "; ".join(reversed(opened)))
+    if a.finale and opened:
+        print(f"error: finale with {len(opened)} open promise(s); pay them off or drop them on purpose")
+        sys.exit(1)
+
+
+def cmd_npcs(a):
+    """Three-line NPC cards: '- Name: look; doing now; hook because why'."""
+    sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
+    npcs = [l[2:].strip() for l in sec.get("npcs", []) if l[:2] in ("- ", "* ")]
+    if not npcs:
+        die("no ## NPCs bullets")
+    errs = []
+    for n in npcs:
+        name, _, rest = n.partition(":")
+        parts = [x.strip() for x in rest.split(";")]
+        if len(parts) != 3 or not all(parts):
+            errs.append(f"{name.strip()}: want three parts 'look; doing now; hook because why'")
+        elif "because" not in parts[2].lower():
+            errs.append(f"{name.strip()}: hook has no why (add 'because ...')")
+    for e in errs:
+        print("error: " + e)
+    if errs:
+        sys.exit(1)
+    print(f"ok: {len(npcs)} NPCs, each with look, activity and a hook with a why")
+
+
 FIVE = ["entrance", "puzzle", "setback", "climax", "reward"]
 
 
@@ -423,6 +515,7 @@ def main(argv=None):
     t.add_argument("args", nargs="*")
     t.add_argument("--file", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "tracker.json"))
     t.add_argument("--remove", action="store_true")
+    t.add_argument("--public", action="store_true", help="players' board: damage taken, no HP")
     t.set_defaults(fn=cmd_tracker)
     s = sub.add_parser("sheet", help="character JSON to markdown sheet")
     s.add_argument("character"); s.add_argument("--out"); s.set_defaults(fn=cmd_sheet)
@@ -430,6 +523,15 @@ def main(argv=None):
     s.add_argument("character"); s.set_defaults(fn=cmd_check)
     s = sub.add_parser("prep", help="check a session prep card")
     s.add_argument("card"); s.add_argument("--leads", type=int, default=3); s.set_defaults(fn=cmd_prep)
+    s = sub.add_parser("combat-log", help="turn times of a real fight from a CSV log")
+    s.add_argument("log"); s.add_argument("--budget", type=float, default=90); s.add_argument("--gm", default="GM")
+    s.set_defaults(fn=cmd_combatlog)
+    s = sub.add_parser("threads", help="open and paid story promises")
+    s.add_argument("card"); s.add_argument("--finale", action="store_true"); s.set_defaults(fn=cmd_threads)
+    s = sub.add_parser("npcs", help="check three-line NPC cards")
+    s.add_argument("card"); s.set_defaults(fn=cmd_npcs)
+    s = sub.add_parser("world", help="check a setting card's traits")
+    s.add_argument("card"); s.set_defaults(fn=cmd_world)
     s = sub.add_parser("fiveroom", help="check an adventure plan against the five-role arc")
     s.add_argument("plan"); s.set_defaults(fn=cmd_fiveroom)
     s = sub.add_parser("licence", help="notices for the bundled tables")

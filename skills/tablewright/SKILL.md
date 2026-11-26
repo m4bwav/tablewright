@@ -18,11 +18,17 @@ Tables and sources: [references/encounters.md](references/encounters.md).
 
 ## At the table
 
-`tt.py tracker init "Hero:17:20" "Goblin:12:6"` (name:initiative:hp), then `tracker next`, `tracker hit Goblin 5`, `tracker heal Hero 4`, `tracker cond Hero "frightened 1"` (`--remove` to clear), `tracker add "Reinforcement:9:12"`, `tracker show`. Downed combatants are skipped. The file is `TABLEWRIGHT_HOME/tracker.json` unless `--file` is given; one file per running fight.
+`tt.py tracker init "Hero:17:20" "Goblin:12:6"` (name:initiative:hp), then `tracker next`, `tracker hit Goblin 5`, `tracker heal Hero 4`, `tracker cond Hero "frightened 1"` (`--remove` to clear), `tracker add "Reinforcement:9:12"`, `tracker show`. Downed combatants are skipped; `+` marks who is on deck so the next player can get ready. `--public` prints the players' board for a shared screen: order, conditions and damage taken, never HP or HP max. The file is `TABLEWRIGHT_HOME/tracker.json` unless `--file` is given; one file per running fight.
+
+To find what slows fights, log a few real ones as CSV `actor,start,end` (seconds) and run `tt.py combat-log fight.csv`: total time, GM share, median and longest turn per actor, and who runs over 90 s a turn (`--budget`, `--gm NAME`). Measure before blaming anyone.
 
 ## Session prep
 
 Before a session, write a card in markdown with `## Opening`, `## Leads` (three bullets), `## NPCs` (`Name: what they want now`) and optional `## Fights` (each with `out: ...`, a way the fight can end before anyone dies or flees), then `tt.py prep card.md`. It exits 1 on a missing opening, the wrong number of leads (`--leads N` to change) or an NPC without a goal, and warns on a fight with no way out. Keep the card short: prep what the table will actually touch.
+
+For a setting, write `## Traits` with 6 to 8 bullets, each `trait: the place, NPC or faction where players meet it`, then `tt.py world card.md`; it exits 1 on too few or too many traits or a trait with no anchor.
+
+Keep a `## Threads` list of promises and planted objects (`- thing: open` or `- thing: paid`); `tt.py threads card.md` lists the open ones latest first, the usual payoff order, and `--finale` exits 1 while any is open. For NPCs, `tt.py npcs card.md` checks three-line cards under `## NPCs`: `- Name: look; doing now; hook because why`.
 
 ## Adventure structure
 
