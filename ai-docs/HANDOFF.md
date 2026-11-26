@@ -1,6 +1,6 @@
 # tablewright handoff
 
-Updated 2026-11-26. Current release 0.12.0 (oneshot, tpk, alert, backlog, negotiate; Kobold guide checks), merged and tagged. Chain: plugin-backlog/ai-docs/five-wrights/HANDOFF.md.
+Updated 2026-11-26. Current release 0.13.0 (spell, rewards, vendors, mob, hack, settlement, favor; ICRPG, Vigilante City, Altered State and Kobold Cities and Towns checks), merged and tagged. Chain: plugin-backlog/ai-docs/five-wrights/HANDOFF.md.
 
 Done: research, tt.py (encounter, budget, tracker, sheet, check, licence), 11 tests, hub skill, references, furniture.
 Next: wiki (first page needs the browser), three eval runs per case and the trigger cases.
