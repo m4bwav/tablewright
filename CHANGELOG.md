@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.17.0 (2026-11-26)
+- `settlement`: optional government, defence (patrol, muster, allies), commerce (banned, black_market), lodgings and sights blocks, each with warnings. Idea from Dungeons on Demand: Cities & Towns.
+- `tracker poison --save-each --dc N --potency up|down`, poison cards with `potency` and `shelf_life`. Idea from a poisons supplement, pp. 2-4.
+- `tt.py handouts` (purpose, in-world sender, recap after 2+ sessions away) and `npcs` `joins_party` needs an `exit`. Idea from Trail of Tyranny.
+- `encounter --spike N --pc-hp N` and `challenge` `on_fail_time` and `lead_in` DC shift. Idea from an adventure shorts collection.
+- `prep` `## Flow` (start to finish graph, dead ends, single path, rules cheat sheet) and break planning (`hours:`, `## Break` with `goal_check`). Idea from Focal Point, pp. 98-99, 134, 160.
+- `tt.py journey` (rolls your own lead tables, simple or complex, risk labels, clash rerolls; `--check` for a lead slate) with a neutral example table, `tt.py trade` (compounding price walk over road hexes, our flatter band, filled-market cut, no markup for common goods) and `travel --oddity`. Idea from the Borderland Provinces Journey Generator; no setting content carried.
+- `prep` `## Scenes` (purpose, closing, session purpose and closing, combat victory and failure, rules lookup words), `--weak`, `--strong`, `--review [--short] [--party]`, `npcs` tactics need a flee point, `tt.py cadence`. Idea from Never Unprepared, pp. 53, 58-60, 82-97, 101, 109.
+- `tt.py rival` (rival party with a dated timeline and site states) and `tt.py cascade` (disaster opening rows, fates, patrons), plus a SKILL caution on unexplained PC deaths. Idea from Deep Carbon Observatory.
+- `tt.py talk` (petitions with leverage and fallbacks), `npcs --but`, `world` principles and locations, `tt.py islands` with `islands move`, `## Learned` in the session log and `review`, NPC `thread: for Name` in prep, and answer moves in SKILL.md. Idea from Unframed.
+- All thresholds are ours; no book text or tables copied. 23 new tests (173 total).
+
 ## 0.16.0 (2026-11-26)
 - `tt.py variant FILE.json`: monster variant cards (base, axis, keeps, tell, counter, role); fails with no base or axis, control or damage over time with no counter, a changed damage type or immunity with no tell; warns on more than one axis. Idea from New Twists on Old Monsters, pp. 2-8.
 - `tt.py template --cr CR --delta N | --scale X [--template NAME...]`: steps the 5e CR ladder (1/8, 1/4, 1/2 included) or scales and rounds up, prints the new XP, exits 1 below 0, warns on stacked templates. Idea from the Tome of Templates. CR XP values are the SRD ones already bundled.
