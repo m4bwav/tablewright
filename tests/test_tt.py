@@ -213,3 +213,25 @@ def test_prep_tells_and_false_leads():
     r = run("prep", FX / "prep_tricks.md")
     assert r.returncode == 1 and "lethal and hidden" in r.stdout and "no tell" in r.stdout
     assert "2 false leads of 3" in r.stdout and "the mill (false)" in r.stdout and "the well" not in r.stdout.split("false lead with no ending")[-1]
+
+
+def test_villain_cards():
+    r = run("villain", FX / "villains.md")
+    assert r.returncode == 1 and "old mag: no public:" in r.stdout and "ultimatum" in r.stdout
+    assert "salt baron" not in r.stdout
+
+
+def test_twists():
+    r = run("twist", FX / "twists.json")
+    assert r.returncode == 1 and "spells" in r.stdout and "one axis" in r.stdout and "positive" in r.stdout
+
+
+def test_campaign_plan():
+    r = run("campaign", FX / "campaign.json")
+    assert r.returncode == 1 and "PC Bo" in r.stdout and "Vault: no why:" in r.stdout
+    assert "uses Vex, written out in Docks" in r.stdout and "no aftermath" in r.stdout and "payoff" in r.stdout
+
+
+def test_prep_clock():
+    r = run("prep", FX / "prep_clock.md")
+    assert r.returncode == 1 and "shown:" in r.stdout and "clock step without a consequence" in r.stdout

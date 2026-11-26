@@ -409,6 +409,13 @@ def cmd_prep(a):
             errs.append(f"lethal and hidden: players get no fair chance; make it visible or weaker: {x}")
         elif "lethal" in lx and "tell:" not in lx and "warned:" not in lx:
             warns.append(f"lethal threat with no tell (add 'tell: the sign players can notice'): {x}")
+    clock = bullets("clock")
+    if clock:
+        if not any(c.lower().startswith("shown:") for c in clock):
+            warns.append("## Clock has no 'shown:' line; players should see it tick")
+        for c in clock:
+            if not c.lower().startswith("shown:") and (":" not in c or not c.split(":", 1)[1].strip()):
+                errs.append(f"clock step without a consequence (write 'step: what happens'): {c}")
     false = [l for l in leads if "(false)" in l.lower()]
     if false and len(false) >= len(leads) - len(false):
         warns.append(f"{len(false)} false leads of {len(leads)}; keep them fewer than the real ones")
@@ -555,6 +562,84 @@ def cmd_fiveroom(a):
     print(f"ok: {len(areas)} areas in five-role order")
 
 
+def report(errs, warns, ok):
+    for w in warns:
+        print("warn: " + w)
+    for e in errs:
+        print("error: " + e)
+    if errs:
+        sys.exit(1)
+    print("ok: " + ok)
+
+
+def cmd_villain(a):
+    """Villain cards: one '## Name' section each with wants:, public:, reach:, 2+ harm:, offers with 2+ options."""
+    sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
+    errs, warns = [], []
+    for name, lines in sec.items():
+        b = [l[2:].strip() for l in lines if l[:2] in ("- ", "* ")]
+        key = lambda k: [x.split(":", 1)[1].strip() for x in b if x.lower().startswith(k + ":")]
+        for k, why in (("wants", "what they want"), ("public", "the face the world sees"),
+                       ("reach", "why the party cannot just attack them")):
+            if not key(k):
+                errs.append(f"{name}: no {k}: ({why})")
+        if len(key("harm")) < 2:
+            errs.append(f"{name}: {len(key('harm'))} harm: lines, want 2+ indirect ways they hurt the party")
+        for o in key("offer"):
+            opts = [x.strip() for x in o.split("|") if x.strip()]
+            if len(opts) < 2:
+                warns.append(f"{name}: offer with one option is an ultimatum; give 2+: {o}")
+            for x in opts:
+                if "serves:" not in x.lower():
+                    warns.append(f"{name}: offer option does not say how it serves the villain: {x}")
+    if not sec:
+        die("no '## Name' villain sections")
+    report(errs, warns, f"{len(sec)} villains")
+
+
+def cmd_twist(a):
+    """Twists (JSON list of {text, axis, sign, removes, workaround}): axis spread, a positive one, workarounds."""
+    tw = json.loads(Path(a.twists).read_text(encoding="utf-8"))
+    errs, warns = [], []
+    for t in tw:
+        if t.get("removes") and not t.get("workaround"):
+            errs.append(f"twist takes away {t['removes']} with no other route to success: {t.get('text', '?')}")
+    axes = {t.get("axis") for t in tw}
+    if len(tw) >= 2 and len(axes) == 1:
+        warns.append(f"all {len(tw)} twists are on one axis ({axes.pop()}); vary them")
+    if tw and not any(t.get("sign") == "+" for t in tw):
+        warns.append("no twist helps the party; add one positive")
+    report(errs, warns, f"{len(tw)} twists")
+
+
+def cmd_campaign(a):
+    """Campaign plan JSON: every PC has a plotline, adventures have phase and why, NPCs stay out once written out."""
+    c = json.loads(Path(a.plan).read_text(encoding="utf-8"))
+    adv, errs, warns = c.get("adventures", []), [], []
+    for pc in c.get("pcs", []):
+        if not any(pc in x.get("plotline", []) for x in adv):
+            errs.append(f"PC {pc} has no adventure on their plotline")
+    out = {}
+    for i, x in enumerate(adv):
+        n = x.get("name", f"#{i + 1}")
+        for k in ("phase", "why"):
+            if not x.get(k):
+                errs.append(f"{n}: no {k}:")
+        for npc in x.get("npcs", []):
+            if npc in out:
+                errs.append(f"{n}: uses {npc}, written out in {out[npc]}")
+        for npc in x.get("writes_out", []):
+            out[npc] = n
+        if not (x.get("opposed_by") or x.get("opportunist")):
+            warns.append(f"{n}: nobody opposes it or profits from it (opposed_by:, opportunist:)")
+        if x.get("major") and i + 1 < len(adv) and not adv[i + 1].get("aftermath"):
+            warns.append(f"{n}: major adventure with no aftermath or downtime after it")
+    for npc in c.get("payback", []):
+        if not any(npc in x.get("payoff", []) for x in adv):
+            warns.append(f"{npc} is owed payback with no payoff beat")
+    report(errs, warns, f"{len(adv)} adventures, {len(c.get('pcs', []))} PCs with plotlines")
+
+
 TIERS = ["minor", "moderate", "major", "legendary", "campaign"]
 YES = ("yes", "y", "true", "1")
 
@@ -666,6 +751,12 @@ def main(argv=None):
     s.add_argument("table"); s.add_argument("--max-fight", type=float, default=0.35); s.set_defaults(fn=cmd_table)
     s = sub.add_parser("item", help="check magic items pair each boon with a drawback")
     s.add_argument("items"); s.set_defaults(fn=cmd_item)
+    s = sub.add_parser("villain", help="check villain cards")
+    s.add_argument("card"); s.set_defaults(fn=cmd_villain)
+    s = sub.add_parser("twist", help="check a set of planned twists")
+    s.add_argument("twists"); s.set_defaults(fn=cmd_twist)
+    s = sub.add_parser("campaign", help="check a campaign plan")
+    s.add_argument("plan"); s.set_defaults(fn=cmd_campaign)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)

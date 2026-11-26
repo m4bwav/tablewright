@@ -1,0 +1,4 @@
+[
+ {"text": "the guide is the thief", "axis": "identity", "sign": "-"},
+ {"text": "magic fails in the vault", "axis": "identity", "sign": "-", "removes": "spells"}
+]
