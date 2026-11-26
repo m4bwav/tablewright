@@ -22,3 +22,4 @@ Append-only. One line per operation: `## [YYYY-MM-DD] op | title` where op is on
 - 2026-11-26: 0.21.0 adds morale --leader-cumulative, encounter --boss-dpr (--pc-hp now a,b,c list, lowest counts), rooms --keys (rooms had no connection graph; added optional exits, first room is the entrance); 208 tests.
 - 2026-11-26: 0.22.0 extends rooms --keys: several `entry: true` rooms, list locks (all keys needed), foes `flee_to` (missing room fails; locked destination or carried key past its lock warns); lock_key_errors now returns (errs, warns); 211 tests.
 - 2026-11-26: 0.23.0 xp-gap, rooms roleplay fallback lint, foe return_to/fall (RPG harvest session 22).
+- 2026-11-26: 0.24.0 rooms gates (requires, clue_in, locked_until, --pieces), objective command (no objective command existed), encounter --protect/--waves, rest, rumors quest mode, chase --stations (pursuit folded into chase); 222 tests.

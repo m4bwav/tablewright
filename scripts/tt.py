@@ -181,6 +181,17 @@ def cmd_encounter(a):
         res["xp_with_waves"] = total + wave_xp
         res["threat_with_waves"] = band_for(total + wave_xp, budgets)
         notes.append(f"with reinforcements: {total + wave_xp} XP, threat {res['threat_with_waves']}")
+    if a.protect:
+        res["protect"] = protect_rounds(a.protect, a.attackers)
+        for o in res["protect"]:
+            notes.append(f"protect {o['object']} #{o['n']}: breaks in round {o['round']} ({o['hp']} HP)")
+    if a.waves:
+        day = total + wave_xp
+        cap = budgets["moderate"] * DAY_FIGHTS
+        res["day_xp"], res["day_budget"] = day, cap
+        notes.append(f"waves as one no-rest fight: {day} XP against a day budget of {cap} ({DAY_FIGHTS} x moderate)")
+        if day > cap:
+            res["warnings"].append(f"waves total {day} XP with no rest, over the day budget of {cap}; cut a wave or allow a breather")
     bad = any("do not use" in n for n in notes)
     if a.json:
         print(json.dumps(res, indent=2))
@@ -196,6 +207,23 @@ def cmd_encounter(a):
     for w in res["warnings"]:
         print("warn: " + w)
     sys.exit(1 if bad else 0)
+
+
+DAY_FIGHTS = 3  # a no-rest day's budget in moderate fights; our number
+
+
+def protect_rounds(spec, attackers):
+    """OBJ:COUNT:HP objects hit one at a time by N attackers doing DMG each, no rolls: the round each one breaks."""
+    try:
+        obj, cnt, hp = spec.split(":")
+        cnt, hp = int(cnt), int(hp)
+        n, dmg = (int(x) for x in (attackers or "").split(":"))
+    except ValueError:
+        die("--protect OBJ:COUNT:HP wants --attackers N:DMG, e.g. --protect pillar:3:20 --attackers 4:6")
+    if min(cnt, hp, n, dmg) < 1:
+        die("--protect and --attackers numbers must be 1 or more")
+    hits = -(-hp // dmg)
+    return [{"object": obj, "n": i, "hp": hp, "round": -(-(i * hits) // n)} for i in range(1, cnt + 1)]
 
 
 HORDE = 12  # more single foes than this at once bog the table down; our number
@@ -2492,6 +2520,8 @@ def cmd_chase(a):
     rng = random.Random(a.seed)
     if a.legs:
         return chase_legs(a, rng)
+    if a.stations:
+        return chase_pursuit(a, rng)
     comps = CHASE_COMPLICATIONS
     if a.table:
         comps = []
@@ -3282,12 +3312,52 @@ def cmd_rooms(a):
         e2, w2 = lock_key_errors(rooms)
         errs += e2
         warns += w2
+    if a.pieces:
+        e2, w2 = piece_errors(rooms)
+        errs += e2
+        warns += w2
     report(errs, warns, f"{len(rooms)} rooms")
 
 
 def lock_needs(r):
     """A room's locks as sets of keys; a list item is one lock needing all its keys."""
-    return [set(x) if isinstance(x, list) else {x} for x in r.get("locks") or []]
+    out = []
+    for x in r.get("locks") or []:
+        if isinstance(x, dict):
+            x = x.get("requires") or [x.get("key")]
+        out.append(set(x) if isinstance(x, list) else {x})
+    if r.get("requires"):
+        out.append(set(r["requires"]))
+    return out
+
+
+def lock_specs(r):
+    """(keys needed, clue room) per lock; dict locks may give clue_in."""
+    clues = [x.get("clue_in") if isinstance(x, dict) else None for x in r.get("locks") or []]
+    if r.get("requires"):
+        clues.append(r.get("clue_in"))
+    return list(zip(lock_needs(r), clues))
+
+
+def room_keys(r):
+    return set(r.get("keys") or []).union(*[set(f.get("keys") or []) for f in r.get("foes") or []])
+
+
+def grow_keys(by, start, given):
+    """Every key the party can pick up from start, starting with these."""
+    found, grew = set(given), True
+    while grew:
+        grew = False
+        for rn in reach_rooms(by, start, found):
+            new = room_keys(by[rn]) - found
+            if new:
+                found |= new
+                grew = True
+    return found
+
+
+def entry_rooms(rooms):
+    return [r.get("name", "?") for r in rooms if r.get("entry")] or [rooms[0].get("name", "?")]
 
 
 def lock_name(need):
@@ -3329,6 +3399,14 @@ def lock_key_errors(rooms):
     for k in sorted(set(locks) & set(keys)):
         for rn in sorted(set(locks[k]) & set(keys[k])):
             errs.append(f"key {k} is in {rn}, the room it unlocks")
+    events = {e for r in rooms for e in r.get("events") or []}
+    for r in rooms:
+        rn = r.get("name", "?")
+        until = r.get("locked_until")
+        if r.get("locked") and not lock_needs(r) and not until:
+            warns.append(f"{rn}: locked with neither a key nor a locked_until event; say how it opens")
+        if until and events and until not in events:
+            warns.append(f"{rn}: locked until {until}, but no room raises that event")
     for r in rooms:
         for f in r.get("foes") or []:
             to = f.get("flee_to")
@@ -3343,19 +3421,10 @@ def lock_key_errors(rooms):
                 warns.append(f"{r.get('name', '?')}: {f.get('name', 'foe')} has fall damage but no flee_to")
     if not any("exits" in r for r in rooms):
         return errs, warns
-    entries = [r.get("name", "?") for r in rooms if r.get("entry")] or [rooms[0].get("name", "?")]
+    entries = entry_rooms(rooms)
 
     def reach(start, given):
-        found, grew = set(given), True
-        while grew:
-            grew = False
-            for rn in reach_rooms(by, start, found):
-                r = by[rn]
-                new = set(r.get("keys") or []).union(*[set(f.get("keys") or []) for f in r.get("foes") or []]) - found
-                if new:
-                    found |= new
-                    grew = True
-        return found
+        return grow_keys(by, start, given)
 
     for start in entries:
         found = reach(start, ())
@@ -3368,6 +3437,14 @@ def lock_key_errors(rooms):
                 errs.append(f"key {k} can only be reached through its own lock ({', '.join(lock_name(n) for n in own)}){where}")
             else:
                 errs.append(f"key {k} is never reachable from {start}")
+        for r in rooms:
+            for need, clue in lock_specs(r):
+                if not clue:
+                    continue
+                if clue not in by:
+                    errs.append(f"{r.get('name', '?')}: lock {lock_name(need)} has its clue in {clue}, no such room")
+                elif start == entries[0] and clue not in reach_rooms(by, start, grow_keys(by, start, ()) - need):
+                    warns.append(f"{r.get('name', '?')}: the clue for lock {lock_name(need)} is in {clue}, not reachable before the lock")
         for r in rooms:
             rn = r.get("name", "?")
             held = set(r.get("keys") or [])
@@ -3383,6 +3460,60 @@ def lock_key_errors(rooms):
                     if to not in reach_rooms(by, start, found - {k}):
                         warns.append(f"{rn}: {f.get('name', 'foe')} carries key {k} and flees past its lock to {to}; the key goes out of reach{where}")
     return errs, warns
+
+
+def piece_errors(rooms):
+    """Items {name, piece_of: PUZZLE} must lie in rooms reachable without passing the room with puzzle: PUZZLE."""
+    errs, warns = [], []
+    by = {r.get("name", "?"): r for r in rooms}
+    puzzles = {r.get("puzzle"): r.get("name", "?") for r in rooms if r.get("puzzle")}
+    pieces = [(it.get("name", "item"), it.get("piece_of"), r.get("name", "?"))
+              for r in rooms for it in r.get("items") or [] if isinstance(it, dict) and it.get("piece_of")]
+    for pz, pr in puzzles.items():
+        if not any(p == pz for _, p, _ in pieces):
+            warns.append(f"puzzle {pz} ({pr}) has no pieces")
+    start = entry_rooms(rooms)[0]
+    for name, pz, rn in pieces:
+        if pz not in puzzles:
+            errs.append(f"{rn}: {name} is a piece of {pz}, no room has that puzzle")
+            continue
+        cut = dict(by)
+        cut[puzzles[pz]] = dict(by[puzzles[pz]], exits=[])
+        if rn not in reach_rooms(cut, start, grow_keys(cut, start, ())):
+            errs.append(f"{rn}: {name} (piece of {pz}) lies past the puzzle room {puzzles[pz]}; move it before the gate")
+    return errs, warns
+
+
+def cmd_objective(a):
+    """Boss gates over a rooms JSON: --gate FLAG:N needs N rooms with flags: [FLAG]; --kill-list a,b,c any order."""
+    rooms = load_list(a.file, "rooms")
+    by = {r.get("name", "?"): r for r in rooms}
+    start = entry_rooms(rooms)[0]
+    open_rooms = reach_rooms(by, start, grow_keys(by, start, ())) if any("exits" in r for r in rooms) else set(by)
+    errs, warns, done = [], [], []
+    if not a.gate and not a.kill_list:
+        die("give --gate FLAG:N and/or --kill-list a,b,c")
+    for g in a.gate or []:
+        flag, _, n = g.rpartition(":")
+        if not flag or not n.isdigit():
+            die(f"bad gate {g!r} (use FLAG:N)")
+        where = [r.get("name", "?") for r in rooms if flag in (r.get("flags") or [])]
+        if len(where) < int(n):
+            errs.append(f"gate {flag}: needs {n}, only {len(where)} room(s) set it")
+        for rn in where:
+            if rn not in open_rooms:
+                warns.append(f"gate {flag}: {rn} sets it but is unreachable from {start}")
+        done.append(f"boss appears after {n} {flag} of {len(where)}")
+    if a.kill_list:
+        names = [x.strip() for x in a.kill_list.split(",") if x.strip()]
+        home = {f.get("name"): r.get("name", "?") for r in rooms for f in r.get("foes") or []}
+        for x in names:
+            if x not in home:
+                errs.append(f"kill list: {x} is in no room's foes")
+            elif home[x] not in open_rooms:
+                warns.append(f"kill list: {x} is in {home[x]}, unreachable from {start}")
+        done.append(f"any-order kill list of {len(names)}; reveal on the last kill")
+    report(errs, warns, "; ".join(done))
 
 
 # D&D 5e 2024 (SRD 5.2.1, CC-BY-4.0, attribution above): XP total needed for levels 1 to 20.
@@ -4730,6 +4861,8 @@ def cmd_doomtrack(a):
 def cmd_rumors(a):
     """Rumour or lead list JSON: each lead has a skill, a dc, what it reveals and where it points; mixed skills and DCs."""
     d = load_json(a.file)
+    if isinstance(d, dict) and "rumors" in d:
+        return rumor_quests(d)
     leads = d.get("leads") if isinstance(d, dict) else d
     errs, warns = [], []
     if not leads:
@@ -4761,6 +4894,49 @@ def cmd_rumors(a):
         if not 0.3 <= share <= 0.7:
             warns.append(f"{share:.0%} of leads point at key facts; keep it between 30% and 70% (the rest colour and false leads)")
     report(errs, warns, f"{len(leads)} leads over {len(skills)} skills and {len(dcs)} dcs")
+
+
+def rumor_quests(d):
+    """{quests: [id or {id}], rumors: [{text, quest, true: yes|no|later}]}: each rumour tied to a known quest."""
+    quests = [q.get("id") if isinstance(q, dict) else q for q in d.get("quests") or []]
+    rumors = d.get("rumors") or []
+    errs, warns = [], []
+    if not rumors:
+        die("no rumors")
+    for i, r in enumerate(rumors, 1):
+        n = r.get("name", f"rumor {i}")
+        q = r.get("quest")
+        if not q:
+            errs.append(f"{n}: no quest")
+        elif quests and q not in quests:
+            warns.append(f"{n}: quest {q} is not in quests")
+        t = r.get("true")
+        t = {True: "yes", False: "no"}.get(t, t)
+        if t not in ("yes", "no", "later"):
+            errs.append(f"{n}: true must be yes, no or later")
+    for q in quests:
+        if not any(r.get("quest") == q for r in rumors):
+            warns.append(f"quest {q} has no rumour pointing at it")
+    report(errs, warns, f"{len(rumors)} rumours over {len(quests)} quests")
+
+
+def cmd_rest(a):
+    """Hourly d20 interruption: an event on TARGET or more; each quiet hour the target drops by STEP."""
+    if not 1 <= a.interrupt <= 21 or a.step < 0 or a.hours < 1:
+        die("--interrupt 1 to 21, --step 0 or more, --hours 1 or more")
+    quiet, exp, target = 1.0, 0.0, a.interrupt
+    for h in range(1, a.hours + 1):
+        p = min(max(21 - target, 0), 20) / 20
+        first = quiet * p
+        exp += h * first
+        quiet *= 1 - p
+        print(f"hour {h}: event on {max(target, 1)}+ ({p:.0%}); first event this hour {first:.1%}, quiet so far {quiet:.1%}")
+        target -= a.step
+    hit = 1 - quiet
+    if hit:
+        print(f"expected first event at hour {exp / hit:.1f} (when one comes); {hit:.1%} chance of an event in {a.hours} hours")
+    else:
+        print(f"no event can come in {a.hours} hours")
 
 
 def cmd_burst(a):
@@ -5033,6 +5209,32 @@ def cmd_carry(a):
         print(f"  {g['fled']} of them fled: they come back as a return wave, warned")
 
 
+def chase_pursuit(a, rng):
+    """Overland pursuit: each hour (station) d20+pursuer vs d20+quarry track; pursuers win, lead -1; quarry wins, +1."""
+    if a.lead < 1 or a.stations < 1:
+        die("--lead and --stations at least 1")
+    pw = sum(1 for x in range(1, 21) for y in range(1, 21) if x + a.pursuer > y + a.quarry) / 400
+    qw = sum(1 for x in range(1, 21) for y in range(1, 21) if y + a.quarry > x + a.pursuer) / 400
+    dist, caught = {a.lead: 1.0}, 0.0
+    for h in range(1, a.stations + 1):
+        nxt = {}
+        for lead, p in dist.items():
+            for d, q in ((-1, pw), (1, qw), (0, 1 - pw - qw)):
+                nxt[lead + d] = nxt.get(lead + d, 0) + p * q
+        caught += nxt.pop(0, 0.0)
+        dist = nxt
+        print(f"station {h}: caught by now {caught:.1%}")
+    print(f"pursuers win an hour {pw:.0%}, quarry {qw:.0%}; catch odds over {a.stations} stations {caught:.1%} (exact)")
+    lead = a.lead
+    for h in range(1, a.stations + 1):
+        x, y = rng.randint(1, 20) + a.pursuer, rng.randint(1, 20) + a.quarry
+        lead += (y > x) - (x > y)
+        if lead <= 0:
+            print(f"sample: caught at station {h}")
+            return
+    print(f"sample: not caught; lead {lead} after {a.stations} stations")
+
+
 def chase_legs(a, rng):
     """Legged chase: each PC runs each leg; a failed approach costs a round, an attack or damage; complications pass on."""
     d = load_json(a.legs)
@@ -5154,6 +5356,9 @@ def main(argv=None):
             s.add_argument("--pc-hp", type=pc_hp_arg, help="PC full HP, one number or a,b,c (the lowest counts), for --spike and --boss-dpr")
             s.add_argument("--boss-dpr", type=int, help="the boss's damage a round if every attack hits")
             s.add_argument("--exit", help="the party's way out of a fight above the top band")
+            s.add_argument("--protect", help="OBJ:COUNT:HP objects the party must protect")
+            s.add_argument("--attackers", help="N:DMG for --protect: N attackers, fixed DMG each a round")
+            s.add_argument("--waves", action="store_true", help="sum the fight and its --wave entries as one no-rest day")
         else:
             s.add_argument("--threat", default="moderate")
         s.add_argument("--json", action="store_true")
@@ -5337,6 +5542,9 @@ def main(argv=None):
     s.add_argument("--legs", help="JSON legs [{name, rounds, approaches [{skill, dc, fail}], complications}]")
     s.add_argument("--start", help="--legs: the leg where the alarm went off"); s.add_argument("--party", type=int, default=4)
     s.add_argument("--bonus", type=int, default=5, help="--legs: each PC's skill bonus")
+    s.add_argument("--stations", type=int, help="pursuit mode: hourly opposed track rolls for N stations")
+    s.add_argument("--pursuer", type=int, default=0, help="--stations: the pursuers' track bonus")
+    s.add_argument("--quarry", type=int, default=0, help="--stations: the quarry's track bonus")
     s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_chase)
     s = sub.add_parser("attendance", help="who came and what to do with absent PCs")
     s.add_argument("roster"); s.add_argument("--present", type=int, required=True)
@@ -5415,6 +5623,7 @@ def main(argv=None):
     s.add_argument("logs", nargs="+"); s.set_defaults(fn=cmd_awards)
     s = sub.add_parser("rooms", help="check rooms: timer, threat, treat, stake, wonder, dials")
     s.add_argument("--keys", action="store_true", help="check locks and keys: orphans, a key behind its own lock")
+    s.add_argument("--pieces", action="store_true", help="puzzle pieces (piece_of) must lie before the puzzle room")
     s.add_argument("file"); s.set_defaults(fn=cmd_rooms)
     s = sub.add_parser("session-end", help="rounds left and the final turns")
     s.add_argument("--seed", type=int); s.add_argument("--die", type=int, default=6)
@@ -5516,8 +5725,16 @@ def main(argv=None):
     s.add_argument("--killed", type=int, default=0); s.add_argument("--fled", type=int, default=0)
     s.add_argument("--file", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "carry.json"))
     s.set_defaults(fn=cmd_carry)
-    s = sub.add_parser("rumors", help="check a lead list: skill, dc, reveals, points_to, a free lead, 2+ per key fact")
+    s = sub.add_parser("rumors", help="check a lead list, or {quests, rumors} with quest and true: yes|no|later each")
     s.add_argument("file"); s.set_defaults(fn=cmd_rumors)
+    s = sub.add_parser("rest", help="hourly interruption odds for a rest whose target drops each quiet hour")
+    s.add_argument("--interrupt", type=int, required=True, help="d20 target for an event in hour 1")
+    s.add_argument("--step", type=int, default=1, help="target drops by this each quiet hour")
+    s.add_argument("--hours", type=int, default=8); s.set_defaults(fn=cmd_rest)
+    s = sub.add_parser("objective", help="boss gates over a rooms JSON: flag counts and an any-order kill list")
+    s.add_argument("file"); s.add_argument("--gate", action="append", help="FLAG:N, the boss appears after N rooms set FLAG")
+    s.add_argument("--kill-list", help="a,b,c foes to kill in any order; reveal on the last")
+    s.set_defaults(fn=cmd_objective)
     s = sub.add_parser("burst", help="party round-one expected damage against one target")
     s.add_argument("file"); s.set_defaults(fn=cmd_burst)
     s = sub.add_parser("rollout", help="check a staged rollout of disruptive content over sessions")
