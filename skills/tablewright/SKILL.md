@@ -48,6 +48,16 @@ Comfort levels: a safety plan may add `comfort` ({player: {topic: none|offscreen
 - Session review: the `session-log` template has `## Highlights` (`scene; players; payoff`) and `## Weak points` (`scene; players; problem; fix`). `tt.py review logs/*.md` tallies both per player, lists the fixes and warns on a player with no highlight.
 - House rules: `tt.py houserules rules.json` (list of `rule`, `kind` add/change/remove, `why`, `offset`, `review_after`) fails a rule with no why and warns on a removal with no offset or a rule with no review date.
 - Skill challenges and long tasks: `tt.py challenge card.json` (`goal`, `successes`, `failures`, `skills` with `kind`, `on_fail`, `shown`; optional `pool` with `milestones` [{`at`}], `minutes` and `limit`) fails on no goal, under 3 skills or no failure route, and warns on one skill kind, a hidden score or a time limit shorter than a flawless run.
+- Split parties: `tt.py calendar days.json` ({"groups": {name: [{day, event}]}}) prints each timeline and warns when groups drift `--drift 3` days apart.
+- Hirelings: `tt.py hirelings roster.json` (`going_rate`, `leader_cha_mod`, `hirelings` with `name`, `pay`, `treatment`) gives each a loyalty score and the check triggers; `--roll NAME --event unpaid|abused|sent-ahead|bribe|leader-down --seed N` rolls d100.
+- City districts: `tt.py district districts.json` (`name`, `watch`, `bribe`, `gate`, `curfew`, `owner`) warns on gaps and prints one card each.
+- Chases: `tt.py chase --lead 3 --escape 6 --seed N [--table file]` (lines `complication;shift`) runs opposed d6 rounds until caught or escaped.
+- Fight pressure in `prep`: tag fights `treat:` (an edge to find) or `timer:`; a harder fight or climax should turn two of damage, disruption (`hazard:`/`terrain:`), duration (`timer:`), or say `levers: a, b`. Fights may add `stakes: position|assets|character|party` (vary them; a climax risks character or party). Session logs take `ending: countdown|hook|choice|ran-long`, `ended_mid_fight:` and `recap:`; `review` counts endings and warns on missing recaps.
+- House rules may add `situation:` and `distinguishes:`; same situation ruled two ways warns.
+- Traps: `tt.py trap traps.json` (`trigger`, `detection`, `disable`, `effect`, `severity` setback|dangerous|deadly). Downtime: `tt.py downtime acts.json` (`time`, `cost` or `sink`, `outcomes` when `repeatable`, `hook`). Major NPCs (`; major: true`) need `ideal:`, `bond:`, `flaw:` or `secret:`. Non-item rewards in `item` (`reward: blessing`) need `condition` or `expectation`.
+- Villains may add `escape:` (or `captured_ok: true`); fiveroom areas with `dynamic: yes` want `response` and `plan`; party PCs with `joined_mid: true` want `entry` (happenstance|rescued|remnant|errand).
+- Attendance: `tt.py attendance roster.json --present N --dynamic collective|competitive|individualist` warns at half or fewer and says what absent PCs do.
+- Foe roles: `encounter --foe 3:brute`; prints a role count, warns when 4+ foes share one role.
 - Overland travel: `tt.py travel --miles 48 --terrain forest --hours 8 [--known]` gives miles a day (pace times terrain), days, +25% on an unknown route and a fatigue point per hour past 8. Multipliers are ours.
 
 ## Adventure structure

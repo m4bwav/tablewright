@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.11.0 (2026-11-26)
+- `tt.py calendar FILE [--drift 3]`: a world-day ledger per group; prints each group's timeline and warns when split groups drift 3 or more days apart. Idea from the 1979 AD&D Dungeon Masters Guide (time keeping, pp. 37-50).
+- `tt.py hirelings FILE [--roll NAME --event E --seed N]`: hireling loyalty from pay against the going rate, treatment and the leader's charisma modifier; lists the events that call for a check (unpaid, abused, sent ahead, bribe, leader down) and rolls one. Idea from the 1979 AD&D Dungeon Masters Guide (pp. 169-170).
+- `tt.py district FILE`: city district cards with watch strength, bribe cost, gate and curfew rules and the block's owner; warns on missing fields and prints a one-line card each. Idea from the Lankhmar GM guide (AD&D 2e).
+- `tt.py chase [--lead --escape --rounds --table --seed]`: a seeded city pursuit, opposed d6 per round plus a complication from a built-in list or the user's table, ending when caught or escaped. Idea from the Lankhmar GM guide.
+- `encounter --foe 3:brute` (or `"3 role:brute"`): foe roles, a role count, and a warning when 4 or more foes all share one role. Idea from the D&D 4e Dungeon Master's Guide.
+- `tt.py prep`: fights and hazards may carry `treat:` (an edge the party can find); a fight with `threat:` or `diff:` but no `timer:`/`clock:` and no treat warns. Idea from ICRPG Master Edition (Runehammer), pp. 92-93.
+- `tt.py prep`: a fight rated harder than the one before, or a climax, warns when it turns fewer than two of damage, disruption (`hazard:`, `terrain:`) and duration (`timer:`, `clock:`); `levers:` names them outright. Idea from ICRPG Master Edition, pp. 94-95.
+- `session-log` gains an `ending:` line (countdown, hook, choice, ran-long); `tt.py review` counts endings by kind and warns when most ran long. Idea from ICRPG Master Edition, p. 82.
+- `tt.py houserules`: entries may name a `situation` (or `trigger`) and `distinguishes`; two rules for the same situation that differ with no `distinguishes` warn. Idea from Arbiter of Worlds (Alexander Macris), ch. 13, pp. 81-82.
+- `tt.py prep`: fights may carry `stakes: position|assets|character|party`; all rated fights at one level warn, a climax below character warns. Idea from Arbiter of Worlds, ch. 15, pp. 90-91.
+- `session-log` gains `ended_mid_fight:` and `recap:` lines; `review` warns on a mid-fight stop and on a log with no recap. Idea from Arbiter of Worlds, ch. 10, pp. 61-62.
+- `tt.py attendance ROSTER --present N [--dynamic collective|competitive|individualist]`: warns at half or fewer present and says how to handle absent PCs for the group's dynamic. Idea from Arbiter of Worlds, ch. 12, p. 77.
+- `tt.py trap FILE`: each trap needs a trigger, detection, disable method, effect and a severity band (setback, dangerous, deadly); mostly deadly warns. Idea from the D&D 5e Dungeon Master's Guide (2014), ch. 5, pp. 120-122. No DCs or damage numbers included.
+- `tt.py downtime FILE`: each activity needs a time cost and a money cost or sink; repeatable ones need an outcomes table; warns on no hook or one that replaces adventuring. Idea from the 5e DMG, ch. 6, pp. 127-132.
+- `tt.py npcs`: a card tagged `major: true` also needs `ideal:`, `bond:` and `flaw:` (or `secret:`). Idea from the 5e DMG, ch. 4, pp. 89-91.
+- `tt.py item`: an entry with `reward:` (a blessing, title or favour, not an item) needs a `condition` or `expectation`. Idea from the 5e DMG, ch. 7, p. 227.
+- `tt.py villain`: optional `escape:` (how the villain avoids capture, planned in advance); warns without one unless `captured_ok: true`. Idea from the D&D 3.5 Dungeon Master's Guide, pp. 103-104.
+- `tt.py fiveroom`: an area with `dynamic: yes` warns without `response` (alarm) and `plan` (left alone). Idea from the 3.5 DMG, pp. 46-47.
+- `tt.py party`: optional `entry` (happenstance, rescued, remnant, errand); a PC with `joined_mid: true` and no entry warns. Idea from the 3.5 DMG, pp. 129 and 134.
+- 18 new tests; all wording, steps and numbers are ours and unverified.
+
 ## 0.10.0 (2026-11-26)
 - `tt.py safety`: optional `comfort` per player and topic (none, offscreen, limited, full) and `planned` levels; each topic takes the lowest player's level and a planned level above it fails. Idea from the D&D 3.5 Advanced GM guide (Dungeon Master's Guide II era, "Sensitive Subjects"). Empty `takebacks` or `info_flow` warn; idea from the D&D 3.5 Dungeon Master's Guide.
 - `tt.py battle plan.json [--results]`: a mass battle played as three representative fights, each with a shape and a carry-over for a win, and a five-step result. Idea from the D&D 3.5 Advanced GM guide.

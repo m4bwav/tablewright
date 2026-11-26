@@ -18,6 +18,13 @@ Commands:
   item        check magic items (drawback, cost axis, uses, friction)
   mystery     check a mystery's clues per conclusion and its suspects
   safety      check a table safety plan (cut and brake calls, debrief, confirmations)
+  calendar    world-day ledger; warns when split groups drift apart
+  hirelings   hireling loyalty from pay, treatment, charisma; --roll a check
+  district    check city district cards (watch, bribe, gate, curfew, owner)
+  chase       seeded city pursuit with complications
+  trap        check traps (trigger, detection, disable, effect, severity band)
+  downtime    check downtime activities (time, cost or sink, outcome table)
+  attendance  players present against the roster; advice for absent PCs
   licence     notices for the bundled rules tables
 
 Exit 2 is a usage or validation error.
@@ -108,6 +115,7 @@ def band_for(total, budgets):
 def cmd_encounter(a):
     budgets = pf_budgets(a.party) if a.system != "5e" else dnd_budgets(a.party, a.level)
     total, notes = 0, []
+    a.foe, roles = split_roles(a.foe)
     for f in a.foe:
         xp, note = foe_xp(a.system, f, a.level)
         if xp is None:
@@ -128,7 +136,9 @@ def cmd_encounter(a):
         res["notes"].append("above the High budget (2024 has no higher band): expect a character to drop")
     if a.system != "5e" and total > budgets["extreme"]:
         res["notes"].append("over the Extreme budget")
-    res["warnings"] = mission_warnings(a) + wave_warns
+    res["warnings"] = mission_warnings(a) + wave_warns + role_warnings(roles, len(a.foe))
+    if roles:
+        res["roles"] = roles
     if waves:
         res["waves"] = waves
         res["xp_with_waves"] = total + wave_xp
@@ -142,11 +152,40 @@ def cmd_encounter(a):
     print("budgets: " + ", ".join(f"{k} {v}" for k, v in budgets.items()))
     if res["next"]:
         print(f"next band: {res['next']['threat']} needs {res['next']['xp_needed']} XP more")
+    if roles:
+        print("roles: " + ", ".join(f"{k} {v}" for k, v in sorted(roles.items())))
     for n in res["notes"]:
         print("note: " + n)
     for w in res["warnings"]:
         print("warn: " + w)
     sys.exit(1 if bad else 0)
+
+
+def split_roles(foes):
+    """'5:brute' or '5 role:brute' -> level '5' and a role count. Unroled foes count as 'none'."""
+    levels, roles = [], {}
+    for f in foes:
+        f = str(f).strip()
+        role = None
+        if " role:" in f:
+            f, role = f.split(" role:", 1)
+        elif ":" in f:
+            f, role = f.split(":", 1)
+        levels.append(f.strip())
+        if role and role.strip():
+            r = role.strip().lower()
+            roles[r] = roles.get(r, 0) + 1
+    if roles and sum(roles.values()) < len(levels):
+        roles["none"] = len(levels) - sum(roles.values())
+    return levels, roles
+
+
+def role_warnings(roles, n):
+    """A fight of 4+ foes that all share one role plays as one long repeated turn."""
+    named = {k: v for k, v in roles.items() if k != "none"}
+    if n >= 4 and len(named) == 1 and sum(named.values()) == n:
+        return [f"{n} foes, all {next(iter(named))}: mix roles (brute, skirmisher, artillery, controller, leader, lurker) so the fight has more than one problem"]
+    return []
 
 
 HAZARD_REPEAT = 0.1  # each copy of an identical hazard adds this share of one; one answer beats them all
@@ -467,6 +506,11 @@ def tag(text, key):
     return ""
 
 
+DIFF_RANK = {"trivial": 0, "easy": 1, "low": 1, "moderate": 2, "hard": 3, "high": 3, "severe": 4, "deadly": 4, "extreme": 5}
+STAKES = ("position", "assets", "character", "party")
+LEVERS = {"damage": ("damage",), "disruption": ("hazard", "terrain"), "duration": ("timer", "clock")}
+
+
 def cmd_prep(a):
     """Check a session card: an opening, N leads, NPCs that each want something, fights with a way out."""
     sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
@@ -525,6 +569,30 @@ def cmd_prep(a):
             warns.append("no easy fight among the rated ones; give the party a fight to feel strong in")
         if not set(diffs) & {"hard", "severe", "extreme", "high", "deadly"}:
             warns.append("no hard fight among the rated ones; one should test them")
+    prev = None
+    for f in bullets("fights"):
+        timed = tag(f, "timer") or tag(f, "clock")
+        if (tag(f, "threat") or tag(f, "diff")) and not timed and not tag(f, "treat"):
+            warns.append(f"fight with a threat but no timer and no treat (add 'timer: ...' or 'treat: an edge they can find'): {f}")
+        rank = DIFF_RANK.get(tag(f, "diff"), None)
+        harder = "climax" in f.lower() or (rank is not None and prev is not None and rank > prev)
+        if harder:
+            lv = {x.strip() for x in tag(f, "levers").split(",") if x.strip()}
+            if not lv:
+                lv = {k for k, keys in LEVERS.items() if any(tag(f, t) for t in keys)}
+            if len(lv) < 2:
+                warns.append(f"harder fight turns {len(lv)} lever(s) ({', '.join(sorted(lv)) or 'none'}); "
+                             f"raise two of damage, disruption, duration: {f}")
+        if rank is not None:
+            prev = rank
+    stakes = [(f, tag(f, "stakes")) for f in bullets("fights") if tag(f, "stakes")]
+    for f, s in stakes:
+        if s not in STAKES:
+            errs.append(f"stakes: {s}, use {', '.join(STAKES)}")
+        elif "climax" in f.lower() and STAKES.index(s) < STAKES.index("character"):
+            warns.append(f"climax risks only {s}; a climax should put a character or the party on the line: {f}")
+    if len(stakes) >= 2 and len({s for _, s in stakes}) == 1:
+        warns.append(f"every rated fight risks {stakes[0][1]}; vary what is at stake")
     false = [l for l in leads if "(false)" in l.lower()]
     if false and len(false) >= len(leads) - len(false):
         warns.append(f"{len(false)} false leads of {len(leads)}; keep them fewer than the real ones")
@@ -625,12 +693,19 @@ SESSION_LOG = """# Session {n} log
 
 ## Next opening
 - where the next session starts
+- ending: countdown | hook | choice | ran-long (how this session stopped)
+- ended_mid_fight: no
+- recap: two lines read aloud to open next session
 """
+ENDINGS = ("countdown", "hook", "choice", "ran-long")
 
 
 def cmd_sessionlog(a):
     """A session log in prep-card markdown; its ## Threads feed 'tt.py threads'."""
     print(SESSION_LOG.format(n=a.session), end="")
+
+
+NPC_DEPTH = ("ideal", "bond", "flaw")
 
 
 def cmd_npcs(a):
@@ -643,6 +718,13 @@ def cmd_npcs(a):
     for n in npcs:
         name, _, rest = n.partition(":")
         parts = [x.strip() for x in rest.split(";")]
+        extra = {p.split(":", 1)[0].strip().lower(): p.split(":", 1)[1].strip()
+                 for p in parts if ":" in p and p.split(":", 1)[0].strip().lower() in NPC_DEPTH + ("major", "secret")}
+        parts = [p for p in parts if not (":" in p and p.split(":", 1)[0].strip().lower() in extra)]
+        if extra.get("major", "").lower() in ("true", "yes"):
+            for k in NPC_DEPTH:
+                if not extra.get(k) and not (k == "flaw" and extra.get("secret")):
+                    errs.append(f"{name.strip()}: major NPC with no {k}" + (" or secret" if k == "flaw" else ""))
         if len(parts) != 3 or not all(parts):
             errs.append(f"{name.strip()}: want three parts 'look; doing now; hook because why'")
         elif "because" not in parts[2].lower():
@@ -679,6 +761,10 @@ def cmd_fiveroom(a):
         errs.append("climax is not at or next to the end")
     for i, x in enumerate(areas):
         n, r = i + 1, x.get("role")
+        if str(x.get("dynamic", "")).lower() in ("yes", "true"):
+            for k, why in (("response", "what happens when the alarm goes up"), ("plan", "what the occupants do if left alone")):
+                if not x.get(k):
+                    warns.append(f"area {n}: dynamic with no {k} ({why})")
         if r == "puzzle":
             if len(x.get("solutions", [])) < 2:
                 errs.append(f"area {n}: puzzle needs at least 2 solutions")
@@ -766,6 +852,9 @@ def cmd_villain(a):
             for x in opts:
                 if "serves:" not in x.lower():
                     warns.append(f"{name}: offer option does not say how it serves the villain: {x}")
+        if not key("escape") and [v.lower() for v in key("captured_ok")] != ["true"]:
+            warns.append(f"{name}: no escape: (how they avoid capture, planned before the showdown); "
+                         "or 'captured_ok: true' if capture is a fine ending")
     if not sec:
         die("no '## Name' villain sections")
     report(errs, warns, f"{len(sec)} villains")
@@ -927,6 +1016,9 @@ def cmd_venues(a):
     report(errs, warns, f"population {a.population}")
 
 
+PARTY_ENTRY = ("happenstance", "rescued", "remnant", "errand")
+
+
 def cmd_party(a):
     """Party JSON {pcs: [{name, ties, plot_tie}], reveals: [{text, fallback}]}: PC ties, plot ties, plan B."""
     d = json.loads(Path(a.file).read_text(encoding="utf-8"))
@@ -944,6 +1036,11 @@ def cmd_party(a):
             warns.append(f"{n}: tied to fewer than {need} other PCs")
         if not p.get("plot_tie"):
             errs.append(f"{n}: no plot_tie to the main plot")
+        e = p.get("entry")
+        if e and e not in PARTY_ENTRY:
+            errs.append(f"{n}: entry {e!r}, use {', '.join(PARTY_ENTRY)}")
+        elif p.get("joined_mid") and not e:
+            warns.append(f"{n}: joined mid-campaign with no entry ({', '.join(PARTY_ENTRY)}): how they meet the party")
     for r in d.get("reveals", []):
         if not r.get("fallback"):
             errs.append(f"reveal with no fallback if the players guess or skip it: {r.get('text', '?')[:40]}")
@@ -1146,6 +1243,11 @@ def cmd_item(a):
     errs, warns = [], []
     for it in items if isinstance(items, list) else [items]:
         n, b, d = it.get("name", "?"), it.get("benefit_tier"), it.get("drawback_tier")
+        if it.get("reward"):
+            if not (it.get("condition") or it.get("expectation")):
+                errs.append(f"{n}: {it['reward']} reward with no condition or expectation (what the giver expects, "
+                            "and what makes it lapse)")
+            continue
         if b not in TIERS:
             errs.append(f"{n}: benefit_tier must be one of {TIERS}")
         elif not d:
@@ -1389,9 +1491,24 @@ def cmd_battle(a):
 
 def cmd_review(a):
     """Merge '## Highlights' and '## Weak points' from session logs into a per-player tally."""
-    hi, weak, fixes = {}, {}, []
+    hi, weak, fixes, ends = {}, {}, [], {}
     for f in a.logs:
-        sec = prep_sections(Path(f).read_text(encoding="utf-8"))
+        text = Path(f).read_text(encoding="utf-8")
+        recap = False
+        for line in text.splitlines():
+            k, _, v = line.lstrip("-* ").partition(":")
+            v = v.strip().lower()
+            if k.strip().lower() == "recap" and v and not v.startswith("two lines read aloud"):
+                recap = True
+            if k.strip().lower() == "ended_mid_fight" and v in ("yes", "true", "y"):
+                print(f"warn: {f}: ended mid-fight; open next time with the board as it stood and a quick recap of positions")
+            if k.strip().lower() == "ending" and v and "|" not in v:
+                ends[v] = ends.get(v, 0) + 1
+                if v not in ENDINGS:
+                    print(f"warn: {f}: ending {v!r}, use " + ", ".join(ENDINGS))
+        if not recap:
+            print(f"warn: {f}: no recap: line; write two lines to read aloud next session")
+        sec = prep_sections(text)
         for key, tally in (("highlights", hi), ("weak points", weak)):
             for line in sec.get(key, []):
                 if line[:2] not in ("- ", "* "):
@@ -1404,6 +1521,12 @@ def cmd_review(a):
                 if key == "weak points":
                     fixes.append(f"{parts[0]}: {parts[3] if len(parts) > 3 and parts[3] else 'no fix written'}")
     people = sorted(set(hi) | set(weak))
+    if ends:
+        print("endings: " + ", ".join(f"{k} {v}" for k, v in sorted(ends.items())))
+        if ends.get("ran-long", 0) * 2 > sum(ends.values()):
+            print("warn: most sessions ran long instead of stopping on a planned ending")
+    if not people and ends:
+        return
     if not people:
         die("no filled Highlights or Weak points bullets in those logs")
     for who in people:
@@ -1430,6 +1553,16 @@ def cmd_houserules(a):
             warns.append(f"{name}: removed with no offset; whatever relied on it (a class, a threat) is now off balance")
         if r.get("kind") in ("add", "change") and not r.get("review_after"):
             warns.append(f"{name}: no review_after (sessions until the table decides to keep it)")
+    seen = {}
+    for r in rules:
+        sit = str(r.get("situation") or r.get("trigger") or "").strip().lower()
+        if not sit:
+            continue
+        for o in seen.get(sit, []):
+            if o.get("rule") != r.get("rule") and not o.get("distinguishes") and not r.get("distinguishes"):
+                warns.append(f"{o.get('rule')!r} and {r.get('rule')!r} rule the same situation ({sit}) differently; "
+                             "add 'distinguishes:' saying what sets them apart, or merge them")
+        seen.setdefault(sit, []).append(r)
     report(errs, warns, f"{len(rules)} house rule(s) with reasons")
 
 
@@ -1492,6 +1625,236 @@ def cmd_travel(a):
     over = max(0, a.hours - 8)
     if over:
         print(f"fatigue: {math.ceil(over)} point(s) a day from {over:g} hour(s) past 8; {math.ceil(over) * whole} over the trip")
+
+
+# 0.11.0: calendar, hirelings, districts, chases. Numbers and wording are ours.
+def cmd_calendar(a):
+    """World-day ledger JSON {"groups": {name: [{"day": N, "event": "..."}]}}: flags split groups that drift apart."""
+    d = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    groups = d.get("groups", d) if isinstance(d, dict) else None
+    if not isinstance(groups, dict) or not groups:
+        die('want {"groups": {"Name": [{"day": 1, "event": "..."}]}}')
+    errs, warns, now = [], [], {}
+    for name, evs in groups.items():
+        last = None
+        print(f"{name}:")
+        for e in evs:
+            day = e.get("day")
+            if not isinstance(day, int):
+                errs.append(f"{name}: event {e.get('event', '?')!r} has no whole-number day")
+                continue
+            if last is not None and day < last:
+                errs.append(f"{name}: day {day} after day {last}; keep each group's events in order")
+            last = day if last is None else max(last, day)
+            print(f"  day {day}: {e.get('event', '')}")
+        now[name] = last if last is not None else 0
+    if len(now) > 1:
+        ahead = max(now, key=now.get)
+        for name, day in sorted(now.items(), key=lambda kv: kv[1]):
+            gap = now[ahead] - day
+            if gap >= a.drift:
+                warns.append(f"{name} is on day {day}, {gap} days behind {ahead} (day {now[ahead]}); "
+                             "play the lagging group forward before the groups meet or trade news")
+    report(errs, warns, f"{len(now)} group(s), world day {max(now.values())}")
+
+
+HIRE_TREAT = {"good": 10, "fair": 0, "poor": -15, "abusive": -30}
+HIRE_EVENTS = {"unpaid": -15, "abused": -20, "sent-ahead": -10, "bribe": -15, "leader-down": -10}
+
+
+def hire_base(h, d):
+    """Loyalty base (5 to 95): 50, pay against the going rate, treatment, 5 per point of leader charisma modifier."""
+    rate = h.get("going_rate", d.get("going_rate"))
+    pay = h.get("pay")
+    base, why = 50, []
+    if isinstance(rate, (int, float)) and isinstance(pay, (int, float)) and rate > 0:
+        r = pay / rate
+        adj = 15 if r >= 1.5 else 5 if r >= 1.0 else -10 if r >= 0.75 else -25
+        base += adj
+        why.append(f"pay {pay:g} vs rate {rate:g} {adj:+d}")
+    treat = str(h.get("treatment", "fair")).lower()
+    t = HIRE_TREAT.get(treat, 0)
+    base += t
+    why.append(f"treatment {treat} {t:+d}")
+    cha = d.get("leader_cha_mod", 0)
+    if isinstance(cha, int) and cha:
+        base += 5 * cha
+        why.append(f"leader charisma {cha:+d} x5")
+    return max(5, min(95, base)), why
+
+
+def cmd_hirelings(a):
+    """Hireling roster JSON: loyalty base from pay vs going rate, treatment, leader charisma; --roll NAME checks it."""
+    d = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    hs = d.get("hirelings", [])
+    if not hs:
+        die("no hirelings in the roster")
+    errs, warns, base = [], [], {}
+    for h in hs:
+        n = h.get("name") or "?"
+        if h.get("pay") is None:
+            errs.append(f"{n}: no pay")
+        if h.get("going_rate", d.get("going_rate")) is None:
+            warns.append(f"{n}: no going_rate (here or roster-wide); pay counts as neutral")
+        if str(h.get("treatment", "fair")).lower() not in HIRE_TREAT:
+            warns.append(f"{n}: treatment {h.get('treatment')!r}, use " + ", ".join(HIRE_TREAT))
+        base[n], why = hire_base(h, d)
+        print(f"{n}: loyalty {base[n]} ({'; '.join(why)})")
+    print("check loyalty on: " + ", ".join(HIRE_EVENTS) + " (left unpaid, mistreated, sent first into danger, "
+          "offered a better deal by a rival, the leader falls)")
+    if a.roll:
+        if a.roll not in base:
+            die(f"no hireling {a.roll!r}")
+        if a.event and a.event not in HIRE_EVENTS:
+            die("--event is one of " + ", ".join(HIRE_EVENTS))
+        target = max(5, min(95, base[a.roll] + HIRE_EVENTS.get(a.event, 0)))
+        import random
+        r = a.die if a.die else random.Random(a.seed).randint(1, 100)
+        res = ("stays loyal" if r <= target else
+               "wavers: refuses this order" if r <= target + 20 else "breaks: flees, deserts or takes the deal")
+        print(f"check {a.roll}{' (' + a.event + ')' if a.event else ''}: d100 {r} vs {target}: {res}")
+    report(errs, warns, f"{len(hs)} hireling(s)")
+
+
+DISTRICT_FIELDS = ("watch", "bribe", "curfew", "owner")
+
+
+def cmd_district(a):
+    """City district cards JSON list: watch strength, bribe cost, gate and curfew rules, who holds the block."""
+    ds = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    if isinstance(ds, dict):
+        ds = ds.get("districts", [])
+    if not ds:
+        die("no districts")
+    warns = []
+    for x in ds:
+        n = x.get("name") or "?"
+        for f in DISTRICT_FIELDS:
+            if x.get(f) in (None, ""):
+                warns.append(f"{n}: no {f}")
+        if x.get("gate") in (None, ""):
+            warns.append(f"{n}: no gate rule (say 'open' if anyone may pass)")
+        print(f"[{n}] watch {x.get('watch', '?')} | bribe {x.get('bribe', '?')} | gate {x.get('gate', '?')} | "
+              f"curfew {x.get('curfew', '?')} | owner {x.get('owner', '?')}")
+    report([], warns, f"{len(ds)} district card(s)")
+
+
+CHASE_COMPLICATIONS = [
+    ("a cart blocks the lane", -1), ("a crowd thickens around a street preacher", -1),
+    ("laundry lines drop across the alley", 0), ("a shortcut over a low roof", 1),
+    ("a watch patrol turns the corner", -1), ("a dog pack bolts out of a yard", 0),
+    ("a bridge choked with porters", -1), ("an open cellar door to dive through", 1),
+    ("rain makes the cobbles slick", 0), ("a market stall to tip over behind you", 1),
+]
+
+
+def cmd_chase(a):
+    """City pursuit: each round both sides roll d6, the higher moves the lead one step, then a complication shifts it."""
+    import random
+    rng = random.Random(a.seed)
+    comps = CHASE_COMPLICATIONS
+    if a.table:
+        comps = []
+        for line in Path(a.table).read_text(encoding="utf-8").splitlines():
+            if not line.strip() or line.startswith("#"):
+                continue
+            text, _, shift = line.partition(";")
+            try:
+                comps.append((text.strip(), int(shift) if shift.strip() else 0))
+            except ValueError:
+                die(f"bad shift in {line!r}; write 'text;-1'")
+        if not comps:
+            die("complication table is empty")
+    if a.lead < 1 or a.escape <= a.lead:
+        die("--lead at least 1 and --escape above it")
+    lead = a.lead
+    for rnd in range(1, a.rounds + 1):
+        q, p = rng.randint(1, 6), rng.randint(1, 6)
+        lead += (q > p) - (p > q)
+        text, shift = rng.choice(comps)
+        lead += shift
+        print(f"round {rnd}: quarry {q} vs pursuer {p}; {text} ({shift:+d}); lead {lead}")
+        if lead <= 0:
+            print(f"caught in round {rnd}")
+            return
+        if lead >= a.escape:
+            print(f"escaped in round {rnd}")
+            return
+    print(f"after {a.rounds} rounds the lead is {lead}: the quarry goes to ground; search or let them go")
+
+
+TRAP_FIELDS = ("trigger", "detection", "disable", "effect")
+TRAP_BANDS = ("setback", "dangerous", "deadly")
+
+
+def load_list(path, key):
+    d = json.loads(Path(path).read_text(encoding="utf-8"))
+    d = d.get(key, []) if isinstance(d, dict) else d
+    if not d:
+        die(f"no {key}")
+    return d
+
+
+def cmd_trap(a):
+    """Traps JSON list: trigger, detection, disable, effect and a severity band each."""
+    traps = load_list(a.file, "traps")
+    errs = []
+    for t in traps:
+        n = t.get("name") or "?"
+        for f in TRAP_FIELDS:
+            if not t.get(f):
+                errs.append(f"{n}: no {f}")
+        if t.get("severity") not in TRAP_BANDS:
+            errs.append(f"{n}: severity {t.get('severity')!r}, use {', '.join(TRAP_BANDS)}")
+    warns = []
+    deadly = [t for t in traps if t.get("severity") == "deadly"]
+    if deadly and len(deadly) * 2 > len(traps):
+        warns.append(f"{len(deadly)} of {len(traps)} traps are deadly; most should cost resources, not lives")
+    report(errs, warns, f"{len(traps)} trap(s) with all four parts and a band")
+
+
+def cmd_downtime(a):
+    """Downtime activities JSON list: time cost and money cost or sink; repeatable ones need an outcome table."""
+    acts = load_list(a.file, "activities")
+    errs, warns = [], []
+    for x in acts:
+        n = x.get("name") or "?"
+        if not x.get("time"):
+            errs.append(f"{n}: no time cost")
+        if not (x.get("cost") or x.get("sink")):
+            errs.append(f"{n}: no cost or sink (money in, or where the money goes)")
+        if x.get("repeatable") and not x.get("outcomes"):
+            errs.append(f"{n}: repeatable with no outcomes table")
+        if x.get("replaces_adventure"):
+            warns.append(f"{n}: replaces adventuring; downtime should feed play, not stand in for it")
+        if not x.get("hook"):
+            warns.append(f"{n}: no hook (a lead the activity can turn up)")
+    report(errs, warns, f"{len(acts)} downtime activit{'y' if len(acts) == 1 else 'ies'}")
+
+
+ABSENT_PCS = {
+    "collective": "the group shares one goal: absent PCs stay with the group as quiet background, take no risks and earn the same rewards",
+    "competitive": "players pursue rival aims: absent PCs step out of the story (busy elsewhere) so nobody gains or loses ground while away",
+    "individualist": "each PC follows a separate thread: pause the absent players' threads and play the present ones' own scenes",
+}
+
+
+def cmd_attendance(a):
+    """Roster (JSON list, {"pcs": [...]}, or one name per line) and how many came; advice for absent PCs."""
+    text = Path(a.roster).read_text(encoding="utf-8")
+    try:
+        d = json.loads(text)
+        pcs = d.get("pcs", []) if isinstance(d, dict) else d
+    except json.JSONDecodeError:
+        pcs = [l.strip() for l in text.splitlines() if l.strip() and not l.startswith("#")]
+    n = len(pcs)
+    if not n or not 0 <= a.present <= n:
+        die(f"--present must be 0 to {n} (roster size)")
+    print(f"{a.present} of {n} present")
+    if a.present * 2 <= n:
+        print("warn: half or fewer present; consider a side adventure, a one-shot, or moving the session")
+    if a.present < n:
+        print(f"absent PCs ({a.dynamic}): {ABSENT_PCS[a.dynamic]}")
 
 
 def main(argv=None):
@@ -1621,6 +1984,27 @@ def main(argv=None):
     s.add_argument("--hours", type=float, default=8, help="hours marched per day")
     s.add_argument("--known", action="store_true", help="the route is known (a guide or a map)")
     s.set_defaults(fn=cmd_travel)
+    s = sub.add_parser("calendar", help="world-day ledger for split groups")
+    s.add_argument("file"); s.add_argument("--drift", type=int, default=3, help="warn when groups are this many days apart")
+    s.set_defaults(fn=cmd_calendar)
+    s = sub.add_parser("hirelings", help="hireling loyalty and loyalty checks")
+    s.add_argument("file"); s.add_argument("--roll", help="hireling to check"); s.add_argument("--event")
+    s.add_argument("--seed", type=int); s.add_argument("--die", type=int, help="use this d100 result")
+    s.set_defaults(fn=cmd_hirelings)
+    s = sub.add_parser("district", help="check city district prep cards")
+    s.add_argument("file"); s.set_defaults(fn=cmd_district)
+    s = sub.add_parser("chase", help="city pursuit tracker")
+    s.add_argument("--lead", type=int, default=3); s.add_argument("--escape", type=int, default=6)
+    s.add_argument("--rounds", type=int, default=10); s.add_argument("--table", help="file of 'complication;shift' lines")
+    s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_chase)
+    s = sub.add_parser("attendance", help="who came and what to do with absent PCs")
+    s.add_argument("roster"); s.add_argument("--present", type=int, required=True)
+    s.add_argument("--dynamic", choices=list(ABSENT_PCS), default="collective")
+    s.set_defaults(fn=cmd_attendance)
+    s = sub.add_parser("trap", help="check traps: trigger, detection, disable, effect, severity")
+    s.add_argument("file"); s.set_defaults(fn=cmd_trap)
+    s = sub.add_parser("downtime", help="check downtime activities: time, cost or sink, outcomes")
+    s.add_argument("file"); s.set_defaults(fn=cmd_downtime)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
