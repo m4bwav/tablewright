@@ -312,6 +312,98 @@ def cmd_sheet(a):
         sys.stdout.write(md)
 
 
+def prep_sections(text):
+    sec, cur = {}, None
+    for line in text.splitlines():
+        if line.startswith("## "):
+            cur = line[3:].strip().lower()
+            sec[cur] = []
+        elif cur is not None and line.strip():
+            sec[cur].append(line.strip())
+    return sec
+
+
+def cmd_prep(a):
+    """Check a session card: an opening, N leads, NPCs that each want something, fights with a way out."""
+    sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
+    bullets = lambda k: [l[2:].strip() for l in sec.get(k, []) if l[:2] in ("- ", "* ")]
+    errs, warns = [], []
+    if not sec.get("opening"):
+        errs.append("no ## Opening: write how the session starts")
+    leads = bullets("leads")
+    if len(leads) != a.leads:
+        errs.append(f"## Leads has {len(leads)}, want {a.leads}: enough for a real choice, few enough to prep")
+    npcs = bullets("npcs")
+    if not npcs:
+        errs.append("no ## NPCs bullets")
+    for n in npcs:
+        if ":" not in n or not n.split(":", 1)[1].strip():
+            errs.append(f"NPC without a goal (write 'Name: what they want now'): {n}")
+    for f in bullets("fights"):
+        if "out:" not in f.lower():
+            warns.append(f"fight without a way to end early (add 'out: ...'): {f}")
+    for w in warns:
+        print("warn: " + w)
+    for e in errs:
+        print("error: " + e)
+    if errs:
+        sys.exit(1)
+    print(f"ok: opening, {len(leads)} leads, {len(npcs)} NPCs with goals")
+
+
+FIVE = ["entrance", "puzzle", "setback", "climax", "reward"]
+
+
+def cmd_fiveroom(a):
+    """Check an adventure plan against the five-role arc (entrance, puzzle, setback, climax, reward)."""
+    areas = json.loads(Path(a.plan).read_text(encoding="utf-8")).get("areas", [])
+    errs, warns = [], []
+    roles = [x.get("role") for x in areas]
+    if not 3 <= len(areas) <= 10:
+        errs.append(f"{len(areas)} areas, want 3 to 10")
+    elif not 4 <= len(areas) <= 6:
+        warns.append(f"{len(areas)} areas; 4 to 6 fits one session")
+    bad = [r for r in roles if r not in FIVE]
+    if bad:
+        errs.append(f"unknown roles {bad}; use {FIVE}")
+    order = [FIVE.index(r) for r in roles if r in FIVE]
+    if order != sorted(order):
+        errs.append("roles out of order: " + " > ".join(map(str, roles)))
+    if roles.count("climax") != 1:
+        errs.append(f"{roles.count('climax')} climax areas, want exactly 1")
+    elif roles.index("climax") < len(roles) - 2:
+        errs.append("climax is not at or next to the end")
+    for i, x in enumerate(areas):
+        n, r = i + 1, x.get("role")
+        if r == "puzzle":
+            if len(x.get("solutions", [])) < 2:
+                errs.append(f"area {n}: puzzle needs at least 2 solutions")
+            c = x.get("clue_in")
+            if not isinstance(c, int) or not 1 <= c < n:
+                warns.append(f"area {n}: no clue planted in an earlier area (clue_in)")
+        if r == "setback" and not x.get("cost"):
+            errs.append(f"area {n}: setback costs nothing (name a cost)")
+        if r == "climax":
+            if not x.get("lever"):
+                errs.append(f"area {n}: climax needs a lever that is not damage")
+            if not x.get("terrain"):
+                warns.append(f"area {n}: climax has no terrain that matters")
+        if r == "reward" and not (x.get("twist") or x.get("hook")):
+            warns.append(f"area {n}: reward has no twist or next hook")
+    if len(areas) > 1 and areas[0].get("mode") and areas[0].get("mode") == areas[1].get("mode"):
+        warns.append("areas 1 and 2 use the same mode; vary them (fight, talk, explore, puzzle)")
+    mins = sum(x.get("minutes", 0) for x in areas)
+    if mins and not 120 <= mins <= 240:
+        warns.append(f"{mins} minutes planned; one session is about 120 to 240")
+    for w in warns:
+        print("warn: " + w)
+    for e in errs:
+        print("error: " + e)
+    if errs:
+        sys.exit(1)
+    print(f"ok: {len(areas)} areas in five-role order")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -336,6 +428,10 @@ def main(argv=None):
     s.add_argument("character"); s.add_argument("--out"); s.set_defaults(fn=cmd_sheet)
     s = sub.add_parser("check", help="check a character JSON")
     s.add_argument("character"); s.set_defaults(fn=cmd_check)
+    s = sub.add_parser("prep", help="check a session prep card")
+    s.add_argument("card"); s.add_argument("--leads", type=int, default=3); s.set_defaults(fn=cmd_prep)
+    s = sub.add_parser("fiveroom", help="check an adventure plan against the five-role arc")
+    s.add_argument("plan"); s.set_defaults(fn=cmd_fiveroom)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
