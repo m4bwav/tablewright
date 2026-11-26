@@ -144,6 +144,13 @@ def cmd_encounter(a):
         total += xp
         if note:
             notes.append(f"foe {f}: {note}")
+    for spec in a.throng or []:
+        cnt, _, crowd = spec.partition("x")
+        if not cnt.isdigit() or not crowd:
+            die(f"bad throng {spec!r} (use COUNTxFOE: COUNT weak foes fought as one crowd of level or CR FOE)")
+        xp, note = foe_xp(a.system, crowd, a.level)
+        total += xp or 0
+        notes.append(f"throng {spec}: {cnt} weak foes count as one crowd, {xp or 0} XP" + (f" ({note})" if note else ""))
     haz_xp, haz_notes = hazard_xp(a.system, a.hazard or [], a.level)
     total += haz_xp
     notes += haz_notes
@@ -164,7 +171,7 @@ def cmd_encounter(a):
         res["notes"].append("above the High budget (2024 has no higher band): expect a character to drop")
     if a.system != "5e" and total > budgets["extreme"]:
         res["notes"].append("over the Extreme budget")
-    res["warnings"] = mission_warnings(a) + wave_warns + role_warnings(roles, len(a.foe))
+    res["warnings"] = mission_warnings(a) + wave_warns + role_warnings(roles, len(a.foe)) + solo_horde_warnings(a)
     if roles:
         res["roles"] = roles
     if waves:
@@ -187,6 +194,24 @@ def cmd_encounter(a):
     for w in res["warnings"]:
         print("warn: " + w)
     sys.exit(1 if bad else 0)
+
+
+HORDE = 12  # more single foes than this at once bog the table down; our number
+HORDE_WAVE = 8
+
+
+def solo_horde_warnings(a):
+    """--solo needs tactics, a fallback and terrain; a horde over HORDE foes with no --wave should come in waves."""
+    w = []
+    if a.solo:
+        for flag, why in (("tactics", "what the solo does each round"), ("fallback", "what it does when hurt or cornered"),
+                          ("terrain", "the ground it uses")):
+            if not getattr(a, flag):
+                w.append(f"solo with no --{flag}: {why}; a lone foe with only attacks folds to action economy")
+    if len(a.foe) > HORDE and not a.wave:
+        w.append(f"{len(a.foe)} foes at once with no --wave: send waves of about {HORDE_WAVE} with a breather between,"
+                 " or fold weak ones into a --throng")
+    return w
 
 
 def split_roles(foes):
@@ -346,11 +371,12 @@ def show(d, public=False):
         mark = ">" if i == d["turn"] else ("+" if i == deck else " ")
         conds = (" [" + ", ".join(c["conditions"]) + "]") if c["conditions"] else ""
         conds += "".join(f" ({e['name']} {e['rounds']}r)" for e in c.get("effects", []))
+        conds += "".join(f" ({x['name']} stage {x['stage'] + 1}/{len(x['stages'])})" for x in c.get("poisons", []))
         state = " DOWN" if c["hp"] <= 0 else ""
         hp = f"took {c['max_hp'] - c['hp']}" if public else f"{c['hp']}/{c['max_hp']}"
         print(f"{mark} {c['init']:>3} {c['name']:<16} {hp}{state}{conds}")
     for c in d.get("clocks", []):
-        print(f"clock {c['name']}: {c['left']} {c['unit']}(s) left")
+        print(f"clock {c['name']}: {c['left']} {c['unit']}(s) left" + (f" ({c['owner']})" if c.get("owner") else ""))
 
 
 def tick_effects(d):
@@ -366,6 +392,35 @@ def tick_effects(d):
                 print(f"{c['name']}: {e['name']} ended")
         if "effects" in c:
             c["effects"] = keep
+
+
+def tick_poisons(d):
+    """A new round: each poison's interval counts down; at 0 it moves to its next stage, past the last it ends."""
+    for c in d["order"]:
+        keep = []
+        for x in c.get("poisons", []):
+            x["left"] -= 1
+            if x["left"] <= 0:
+                x["stage"] += 1
+                x["left"] = x["every"]
+                if x["stage"] >= len(x["stages"]):
+                    d["log"].append(f"r{d['round']} {c['name']}: {x['name']} ran its course")
+                    print(f"{c['name']}: {x['name']} ran its course")
+                    continue
+                print(f"{c['name']}: {x['name']} stage {x['stage'] + 1}: {x['stages'][x['stage']]} (save again)")
+            keep.append(x)
+        if "poisons" in c:
+            c["poisons"] = keep
+
+
+def tick_owner(d, name):
+    """A countdown die turns down one on its owner's turn; at 0 it fires."""
+    for c in d.get("clocks", []):
+        if c["unit"] == "owner" and c.get("owner") == name:
+            c["left"] -= 1
+            if c["left"] > 0:
+                print(f"countdown {c['name']}: {c['left']} on the die")
+    tick_clocks(d, None)
 
 
 def tick_clocks(d, unit):
@@ -426,11 +481,13 @@ def cmd_tracker(a):
                 if i >= len(d["order"]):
                     i, d["round"] = 0, d["round"] + 1
                     tick_effects(d)
+                    tick_poisons(d)
                     tick_clocks(d, "round")
                 if d["order"][i]["hp"] > 0:
                     break
             d["turn"] = i
             tick_clocks(d, "turn")
+            tick_owner(d, d["order"][i]["name"])
         elif a.action == "clock":
             if a.args and a.args[0] == "tick":
                 names = a.args[1:] or [c["name"] for c in d.get("clocks", [])]
@@ -448,6 +505,33 @@ def cmd_tracker(a):
                 d.setdefault("clocks", []).append({"name": a.args[0], "left": n, "unit": a.unit})
             else:
                 die("clock NAME N --unit turn|round, or clock tick [NAME] [--fail]")
+        elif a.action == "poison":
+            if a.args[:1] == ["cure"] and len(a.args) >= 2:
+                c = find(d, a.args[1])
+                c["poisons"] = [x for x in c.get("poisons", []) if len(a.args) > 2 and x["name"].lower() != a.args[2].lower()]
+                d["log"].append(f"r{d['round']} {c['name']} cured")
+            elif len(a.args) in (3, 4):
+                c = find(d, a.args[0])
+                stages = [x.strip() for x in a.args[2].split(",") if x.strip()]
+                try:
+                    every = int(a.args[3]) if len(a.args) == 4 else 1
+                except ValueError:
+                    die("poison interval must be a number of rounds")
+                if not stages or every < 1:
+                    die("poison needs stages a,b,c and an interval of 1 or more rounds")
+                c.setdefault("poisons", []).append({"name": a.args[1], "stages": stages, "stage": 0, "every": every, "left": every})
+                print(f"{c['name']}: {a.args[1]} stage 1: {stages[0]}")
+            else:
+                die("poison NAME POISON STAGE1,STAGE2,... [INTERVAL_ROUNDS], or poison cure NAME [POISON]")
+        elif a.action == "countdown":
+            if len(a.args) != 2 or not a.owner:
+                die("countdown NAME dN --owner COMBATANT")
+            try:
+                n = int(a.args[1].lstrip("dD"))
+            except ValueError:
+                die("countdown die as dN, e.g. d6")
+            owner = find(d, a.owner)["name"]
+            d.setdefault("clocks", []).append({"name": a.args[0], "left": n, "unit": "owner", "owner": owner})
         elif a.action == "cond":
             if len(a.args) < 2:
                 die("cond NAME CONDITION [--remove]")
@@ -1838,10 +1922,33 @@ def cmd_challenge(a):
                     errs.append(f"milestone at {m.get('at')!r} is outside the pool 1 to {pool - 1}")
             if not ms:
                 warns.append("long task with no milestones; partial progress should show and pay")
+    errs += challenge_caps(d, skills, succ, warns)
     mins, limit = d.get("minutes"), d.get("limit")
     if mins and limit and isinstance(succ, int) and limit < succ * mins:
         warns.append(f"limit {limit} min is under {succ} attempts x {mins} min; the clock beats a flawless run")
     report(errs, warns, f"{succ} successes before {fail} failures, {len(skills)} skills")
+
+
+def challenge_caps(d, skills, succ, warns):
+    """Per-skill max, requires gates and assists (no success). Only checked when some skill has a max."""
+    errs = []
+    names = {s.get("name") for s in skills}
+    for s in skills:
+        if s.get("requires") and s["requires"] not in names:
+            errs.append(f"{s.get('name')}: requires {s['requires']!r}, which is not a skill here")
+    outs = d.get("outcomes") or {}
+    for k in outs:
+        if not str(k).isdigit() or (isinstance(succ, int) and int(k) >= succ):
+            errs.append(f"outcome at {k!r} successes; use 0 to {succ - 1 if isinstance(succ, int) else '?'}")
+    if not isinstance(succ, int) or not any("max" in s for s in skills):
+        return errs
+    scoring = [s for s in skills if not s.get("assist")]
+    if all("max" in s for s in scoring) and sum(s["max"] for s in scoring) < succ:
+        errs.append(f"skill caps add to {sum(s['max'] for s in scoring)}, under the {succ} successes needed")
+    for s in scoring:
+        if s.get("max", succ) >= succ and not s.get("requires"):
+            warns.append(f"{s.get('name')}: uncapped, it can finish the challenge alone; give it a max")
+    return errs
 
 
 TERRAIN = {"road": 1.0, "plains": 0.75, "forest": 0.5, "hills": 0.5, "swamp": 0.35, "mountain": 0.25, "desert": 0.5}
@@ -2010,6 +2117,24 @@ def cmd_chase(a):
             die("complication table is empty")
     if a.lead < 1 or a.escape <= a.lead:
         die("--lead at least 1 and --escape above it")
+    if a.grid:
+        if a.grid <= a.lead:
+            die("--grid must be longer than --lead")
+        quarry, hunter = a.lead, 0
+        for rnd in range(1, a.rounds + 1):
+            q, h = rng.randint(1, 3), rng.randint(1, 3)
+            text, shift = rng.choice(comps)
+            quarry, hunter = quarry + q + max(shift, 0), hunter + h - min(shift, 0)
+            track = "".join("Q" if i == quarry else "P" if i == hunter else "." for i in range(a.grid + 1))
+            print(f"round {rnd}: quarry +{q}, pursuer +{h}; {text} ({shift:+d}) {track}")
+            if hunter >= quarry:
+                print(f"caught in round {rnd}")
+                return
+            if quarry >= a.grid:
+                print(f"escaped in round {rnd}")
+                return
+        print(f"after {a.rounds} rounds the gap is {quarry - hunter}: the quarry goes to ground")
+        return
     lead = a.lead
     for rnd in range(1, a.rounds + 1):
         q, p = rng.randint(1, 6), rng.randint(1, 6)
@@ -2028,6 +2153,8 @@ def cmd_chase(a):
 
 TRAP_FIELDS = ("trigger", "detection", "disable", "effect")
 TRAP_BANDS = ("setback", "dangerous", "deadly")
+TRAP_FULL = ("avoid", "reset", "alarm")
+HAUNT_REARM = ("leave", "rest", "never")
 
 
 def load_list(path, key):
@@ -2049,7 +2176,22 @@ def cmd_trap(a):
                 errs.append(f"{n}: no {f}")
         if t.get("severity") not in TRAP_BANDS:
             errs.append(f"{n}: severity {t.get('severity')!r}, use {', '.join(TRAP_BANDS)}")
+        if t.get("kind") == "haunt":
+            det = t.get("detection")
+            if not (isinstance(det, list) and len(det) >= 2):
+                errs.append(f"{n}: a haunt needs a second detection route (detection as a list of 2+)")
+            if "thiever" in str(t.get("disable", "")).lower():
+                errs.append(f"{n}: a haunt is laid to rest, not picked; give a non-thievery disable")
+            if not t.get("anchor"):
+                errs.append(f"{n}: a haunt needs an anchor (what holds it here)")
+            if t.get("rearm") not in HAUNT_REARM:
+                errs.append(f"{n}: rearm {t.get('rearm')!r}, use {', '.join(HAUNT_REARM)}")
     warns = []
+    if a.full:
+        for t in traps:
+            miss = [f for f in TRAP_FULL if not t.get(f)]
+            if miss:
+                warns.append(f"{t.get('name') or '?'}: no {', '.join(miss)}")
     deadly = [t for t in traps if t.get("severity") == "deadly"]
     if deadly and len(deadly) * 2 > len(traps):
         warns.append(f"{len(deadly)} of {len(traps)} traps are deadly; most should cost resources, not lives")
@@ -3304,6 +3446,181 @@ def cmd_sell(a):
         print(f"risky buyer: {d.get('risk', 'the deal may go bad')}")
 
 
+VARIANT_CONTROL = ("control", "dot")
+VARIANT_TELL = ("damage_type", "immunity")
+
+
+def cmd_variant(a):
+    """Monster variant cards: base, axis (what changed), keeps, tell, counter, role. One axis at a time reads best."""
+    cards = load_list(a.file, "variants")
+    errs, warns = [], []
+    for v in cards:
+        n = v.get("name") or "?"
+        axis = v.get("axis") or []
+        axis = [axis] if isinstance(axis, str) else axis
+        if not v.get("base"):
+            errs.append(f"{n}: no base creature")
+        if not axis:
+            errs.append(f"{n}: no axis (what the variant changes)")
+        if any(x in VARIANT_CONTROL for x in axis) and not v.get("counter"):
+            errs.append(f"{n}: adds control or damage over time with no counter the players can use")
+        if any(x in VARIANT_TELL for x in axis) and not v.get("tell"):
+            errs.append(f"{n}: changes damage type or immunity with no tell the players can see first")
+        if len(axis) > 1:
+            warns.append(f"{n}: {len(axis)} axes changed ({', '.join(axis)}); one reads as a twist, more as a new monster")
+        for f in ("keeps", "role"):
+            if not v.get(f):
+                warns.append(f"{n}: no {f}")
+    report(errs, warns, f"{len(cards)} variant(s)")
+
+
+CR_LADDER = list(CR_XP)
+
+
+def cr_value(cr):
+    num, _, den = cr.partition("/")
+    return int(num) / int(den) if den else float(cr)
+
+
+def cmd_template(a):
+    """Apply a template to a 5e CR: step along the ladder (0, 1/8, 1/4, 1/2, 1, 2...) or scale and round up."""
+    cr = {"0.125": "1/8", "0.25": "1/4", "0.5": "1/2"}.get(a.cr, a.cr)
+    if cr not in CR_XP:
+        die(f"unknown challenge rating: {a.cr}")
+    if (a.delta is None) == (a.scale is None):
+        die("give --delta N or --scale X")
+    i = CR_LADDER.index(cr)
+    if a.delta is not None:
+        j = i + a.delta
+        if j < 0:
+            print(f"CR {cr} {a.delta:+d} steps falls below 0; pick a smaller step")
+            sys.exit(1)
+        new = CR_LADDER[min(j, len(CR_LADDER) - 1)]
+    else:
+        want = cr_value(cr) * a.scale
+        new = next((c for c in CR_LADDER if cr_value(c) >= want - 1e-9), CR_LADDER[-1])
+    if len(a.template or []) > 1:
+        print(f"warn: {len(a.template)} templates stacked ({', '.join(a.template)}); the math drifts, playtest it")
+    print(f"CR {cr} ({CR_XP[cr]} XP) -> CR {new} ({CR_XP[new]} XP)")
+
+
+POISON_FIELDS = ("delivery", "save", "interval", "onset", "stages")
+
+
+def cmd_poison(a):
+    """Poison cards: delivery, save, interval, onset, stages and an end condition; DC 10-20."""
+    ps = load_list(a.file, "poisons")
+    errs, warns = [], []
+    for p in ps:
+        n = p.get("name") or "?"
+        for f in POISON_FIELDS:
+            if not p.get(f):
+                errs.append(f"{n}: no {f}")
+        if not p.get("end"):
+            warns.append(f"{n}: no end condition (saves in a row, a cure, a time); it could run forever")
+        dc = p.get("dc")
+        if dc is not None and (not isinstance(dc, int) or not 10 <= dc <= 20):
+            warns.append(f"{n}: DC {dc!r} is outside 10-20")
+    report(errs, warns, f"{len(ps)} poison(s)")
+
+
+PORTAL_FIELDS = ("location", "destination", "key", "direction", "timing")
+PORTAL_DIRS = ("two-way", "one-way", "intermittent")
+
+
+def cmd_portal(a):
+    """Portal cards: location, destination, key, direction, timing; one-way or intermittent needs a way back."""
+    ps = load_list(a.file, "portals")
+    errs = []
+    for p in ps:
+        n = p.get("name") or "?"
+        for f in PORTAL_FIELDS:
+            if not p.get(f):
+                errs.append(f"{n}: no {f}")
+        d = p.get("direction")
+        if d and d not in PORTAL_DIRS:
+            errs.append(f"{n}: direction {d!r}, use {', '.join(PORTAL_DIRS)}")
+        if d in ("one-way", "intermittent") and not p.get("return") and p.get("strand") != "intended":
+            errs.append(f"{n}: {d} with no return route; add return or strand: intended")
+    report(errs, [], f"{len(ps)} portal(s) with all five attributes")
+
+
+def cmd_short(a):
+    """One site, several tiers: each tier's encounter against its budget; the cache should grow tier to tier."""
+    d = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    errs, warns = [], []
+    if not d.get("site"):
+        errs.append("no site")
+    tiers = d.get("tiers") or []
+    if len(tiers) < 2:
+        errs.append(f"{len(tiers)} tier(s); a short runs at two or more")
+    system = d.get("system", "5e")
+    last = None
+    for t in tiers:
+        lvl, party = t.get("level"), t.get("party", 4)
+        if not isinstance(lvl, int):
+            errs.append(f"tier with level {lvl!r}")
+            continue
+        budgets = pf_budgets(party) if system != "5e" else dnd_budgets(party, lvl)
+        total = 0
+        for f in t.get("foes", []):
+            xp, _ = foe_xp(system, str(f), lvl)
+            total += xp or 0
+        c = t.get("cache")
+        print(f"level {lvl}: {total} XP, threat {band_for(total, budgets)}; cache {c}")
+        if not isinstance(c, (int, float)):
+            warns.append(f"level {lvl}: no cache value")
+            continue
+        if last is not None and c <= last:
+            warns.append(f"level {lvl}: cache {c} does not grow from {last}")
+        last = c
+    report(errs, warns, f"{d.get('site')}: {len(tiers)} tiers")
+
+
+def cmd_vote(a):
+    """Council roll call: factions vote for, against or undecided (hidden ones show ?); the margin adds to a d20."""
+    import random
+    fs = load_list(a.file, "factions")
+    rng = random.Random(a.seed)
+    if not any(f.get("support") == "undecided" for f in fs):
+        print("warn: no undecided faction; nothing for the party to win over")
+
+    def tally(r):
+        m = 0
+        for f in fs:
+            s = f.get("support")
+            if s == "undecided":
+                s = r.choice(("for", "against"))
+            m += f.get("votes", 1) * (1 if s == "for" else -1 if s == "against" else 0)
+        return m
+
+    for f in fs:
+        shown = "?" if f.get("hidden") else f.get("support")
+        print(f"{f.get('name')}: {f.get('votes', 1)} vote(s), {shown}")
+    m = tally(rng)
+    r = rng.randint(1, 20)
+    print(f"margin {m:+d}; d20 {r} {m:+d} = {r + m} vs DC {a.dc}: {'passes' if r + m >= a.dc else 'fails'}")
+    if a.odds:
+        sim = random.Random(a.seed)
+        n = 10000
+        wins = sum(1 for _ in range(n) if sim.randint(1, 20) + tally(sim) >= a.dc)
+        print(f"odds: {100 * wins / n:.1f}% over {n} trials")
+
+
+def cmd_hoard(a):
+    """Treasure hoard parcels: 3 to 5, at least one magic item, at least 3 kinds."""
+    ps = load_list(a.file, "parcels")
+    errs, warns = [], []
+    if not 3 <= len(ps) <= 5:
+        warns.append(f"{len(ps)} parcels; 3 to 5 keeps a hoard memorable without a ledger")
+    if not any(p.get("magic") for p in ps):
+        errs.append("no magic item parcel")
+    kinds = {p.get("type") for p in ps if p.get("type")}
+    if len(kinds) < 3:
+        errs.append(f"{len(kinds)} treasure type(s), want 3 or more (coins, gems, art, magic...)")
+    report(errs, warns, f"{len(ps)} parcels, {len(kinds)} types")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -3325,12 +3642,16 @@ def main(argv=None):
             s.add_argument("--smart", action="store_true", help="the foes are intelligent")
             s.add_argument("--escape", help="the foes' way out")
             s.add_argument("--count-foe", action="append", help="DICExLEVEL: a dice-range count of one foe, e.g. 2d4x1")
+            s.add_argument("--throng", action="append", help="COUNTxFOE: COUNT weak foes fought as one crowd of level or CR FOE")
+            s.add_argument("--solo", action="store_true", help="one foe against the party; wants --tactics, --fallback, --terrain")
+            s.add_argument("--tactics"); s.add_argument("--fallback"); s.add_argument("--terrain")
         else:
             s.add_argument("--threat", default="moderate")
         s.add_argument("--json", action="store_true")
         s.set_defaults(fn=fn)
     t = sub.add_parser("tracker", help="initiative and HP tracker")
-    t.add_argument("action", choices=["init", "add", "hit", "heal", "next", "late", "cond", "effect", "clock", "show"])
+    t.add_argument("action", choices=["init", "add", "hit", "heal", "next", "late", "cond", "effect", "clock", "poison", "countdown", "show"])
+    t.add_argument("--owner", help="countdown: the combatant whose turn turns the die down")
     t.add_argument("--unit", choices=["turn", "round"], default="round", help="clock: ticks on each next or at the round wrap")
     t.add_argument("--fail", action="store_true", help="clock tick: a failure ticks one extra")
     t.add_argument("--timer", type=int, help="init: seconds per player turn; 'late' delays whoever runs out")
@@ -3462,13 +3783,15 @@ def main(argv=None):
     s = sub.add_parser("chase", help="city pursuit tracker")
     s.add_argument("--lead", type=int, default=3); s.add_argument("--escape", type=int, default=6)
     s.add_argument("--rounds", type=int, default=10); s.add_argument("--table", help="file of 'complication;shift' lines")
+    s.add_argument("--grid", type=int, help="progress-track mode: a track this long; each side moves 1-3 a round")
     s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_chase)
     s = sub.add_parser("attendance", help="who came and what to do with absent PCs")
     s.add_argument("roster"); s.add_argument("--present", type=int, required=True)
     s.add_argument("--dynamic", choices=list(ABSENT_PCS), default="collective")
     s.set_defaults(fn=cmd_attendance)
     s = sub.add_parser("trap", help="check traps: trigger, detection, disable, effect, severity")
-    s.add_argument("file"); s.set_defaults(fn=cmd_trap)
+    s.add_argument("file"); s.add_argument("--full", action="store_true", help="also want avoid, reset and alarm")
+    s.set_defaults(fn=cmd_trap)
     s = sub.add_parser("downtime", help="check downtime activities: time, cost or sink, outcomes")
     s.add_argument("file"); s.set_defaults(fn=cmd_downtime)
     s = sub.add_parser("oneshot", help="check a one-shot card: bond, plot, finish, pregens")
@@ -3580,6 +3903,23 @@ def main(argv=None):
     s.add_argument("--market", required=True); s.add_argument("--rarity"); s.add_argument("--ingredients", type=int)
     s.add_argument("--mod", type=int, default=0); s.add_argument("--risky", action="store_true"); s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_sell)
+    s = sub.add_parser("variant", help="check monster variant cards: base, axis, keeps, tell, counter, role")
+    s.add_argument("file"); s.set_defaults(fn=cmd_variant)
+    s = sub.add_parser("template", help="5e CR after a template: ladder steps or a scale, rounded up")
+    s.add_argument("--cr", required=True); s.add_argument("--delta", type=int); s.add_argument("--scale", type=float)
+    s.add_argument("--template", action="append", help="template name; repeat to stack (warns)")
+    s.set_defaults(fn=cmd_template)
+    s = sub.add_parser("poison", help="check poison cards: delivery, save, interval, onset, stages, end")
+    s.add_argument("file"); s.set_defaults(fn=cmd_poison)
+    s = sub.add_parser("portal", help="check portal cards: five attributes and a way back")
+    s.add_argument("file"); s.set_defaults(fn=cmd_portal)
+    s = sub.add_parser("short", help="one site at several tiers: encounter per tier, cache grows")
+    s.add_argument("file"); s.set_defaults(fn=cmd_short)
+    s = sub.add_parser("vote", help="council roll call with hidden support; margin adds to a d20")
+    s.add_argument("file"); s.add_argument("--dc", type=int, default=10); s.add_argument("--odds", action="store_true")
+    s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_vote)
+    s = sub.add_parser("hoard", help="check hoard parcels: 3-5, a magic item, 3+ types")
+    s.add_argument("file"); s.set_defaults(fn=cmd_hoard)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
