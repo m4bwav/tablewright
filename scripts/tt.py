@@ -3277,8 +3277,19 @@ def cmd_rooms(a):
         if streak == 3:
             warns.append(f"{n}: third room in a row with enemies; give one a breather")
     if a.keys:
-        errs += lock_key_errors(rooms)
+        e2, w2 = lock_key_errors(rooms)
+        errs += e2
+        warns += w2
     report(errs, warns, f"{len(rooms)} rooms")
+
+
+def lock_needs(r):
+    """A room's locks as sets of keys; a list item is one lock needing all its keys."""
+    return [set(x) if isinstance(x, list) else {x} for x in r.get("locks") or []]
+
+
+def lock_name(need):
+    return "+".join(sorted(need))
 
 
 def reach_rooms(by, start, found):
@@ -3287,7 +3298,7 @@ def reach_rooms(by, start, found):
     while todo:
         rn = todo.pop()
         r = by.get(rn)
-        if rn in seen or r is None or not set(r.get("locks") or []) <= found:
+        if rn in seen or r is None or not all(n <= found for n in lock_needs(r)):
             continue
         seen.add(rn)
         todo += list(r.get("exits") or [])
@@ -3295,13 +3306,20 @@ def reach_rooms(by, start, found):
 
 
 def lock_key_errors(rooms):
-    """Rooms may give locks: [..] and keys: [..]; with exits: [room names] the first room is the entrance."""
-    errs, locks, keys = [], {}, {}
+    """Rooms may give locks: [key or [keys all needed]] and keys: [..]; exits: [room names] give reachability
+    from every room with entry: true (else the first room); foes: [{name, flee_to, keys}] are checked too."""
+    errs, warns, locks, keys = [], [], {}, {}
+    by = {r.get("name", "?"): r for r in rooms}
     for r in rooms:
-        for k in r.get("locks") or []:
-            locks.setdefault(k, []).append(r.get("name", "?"))
+        rn = r.get("name", "?")
+        for need in lock_needs(r):
+            for k in need:
+                locks.setdefault(k, []).append(rn)
         for k in r.get("keys") or []:
-            keys.setdefault(k, []).append(r.get("name", "?"))
+            keys.setdefault(k, []).append(rn)
+        for f in r.get("foes") or []:
+            for k in f.get("keys") or []:
+                keys.setdefault(k, []).append(rn)
     for k in sorted(set(locks) - set(keys)):
         errs.append(f"lock {k} ({', '.join(locks[k])}) has no key")
     for k in sorted(set(keys) - set(locks)):
@@ -3309,37 +3327,53 @@ def lock_key_errors(rooms):
     for k in sorted(set(locks) & set(keys)):
         for rn in sorted(set(locks[k]) & set(keys[k])):
             errs.append(f"key {k} is in {rn}, the room it unlocks")
+    for r in rooms:
+        for f in r.get("foes") or []:
+            to = f.get("flee_to")
+            if to and to not in by:
+                errs.append(f"{r.get('name', '?')}: {f.get('name', 'foe')} flees to {to}, no such room")
     if not any("exits" in r for r in rooms):
-        return errs
-    by = {r.get("name", "?"): r for r in rooms}
-    start = rooms[0].get("name", "?")
+        return errs, warns
+    entries = [r.get("name", "?") for r in rooms if r.get("entry")] or [rooms[0].get("name", "?")]
 
-    def reach(given):
+    def reach(start, given):
         found, grew = set(given), True
         while grew:
-            grew, seen, todo = False, set(), [start]
-            while todo:
-                rn = todo.pop()
-                r = by.get(rn)
-                if rn in seen or r is None or not set(r.get("locks") or []) <= found:
-                    continue
-                seen.add(rn)
-                new = set(r.get("keys") or []) - found
+            grew = False
+            for rn in reach_rooms(by, start, found):
+                r = by[rn]
+                new = set(r.get("keys") or []).union(*[set(f.get("keys") or []) for f in r.get("foes") or []]) - found
                 if new:
                     found |= new
                     grew = True
-                todo += list(r.get("exits") or [])
         return found
 
-    found = reach(())
-    for k in sorted(set(keys) - found):
-        if any(f"key {k} is in" in e for e in errs):
-            continue
-        if set(keys[k]) & reach_rooms(by, start, reach({k})):
-            errs.append(f"key {k} can only be reached through its own lock")
-        else:
-            errs.append(f"key {k} is never reachable from {start}")
-    return errs
+    for start in entries:
+        found = reach(start, ())
+        where = f" from {start}" if len(entries) > 1 else ""
+        for k in sorted(set(keys) - found):
+            if any(f"key {k} is in" in e for e in errs):
+                continue
+            own = [n for r in rooms for n in lock_needs(r) if k in n]
+            if any(set(keys[k]) & reach_rooms(by, start, reach(start, n)) for n in own):
+                errs.append(f"key {k} can only be reached through its own lock ({', '.join(lock_name(n) for n in own)}){where}")
+            else:
+                errs.append(f"key {k} is never reachable from {start}")
+        for r in rooms:
+            rn = r.get("name", "?")
+            held = set(r.get("keys") or [])
+            for f in r.get("foes") or []:
+                to, fk = f.get("flee_to"), set(f.get("keys") or [])
+                if to not in by or to == rn:
+                    continue
+                if start == entries[0]:
+                    shut = [lock_name(n) for n in lock_needs(by[to]) if not n <= held | fk]
+                    if shut:
+                        warns.append(f"{rn}: {f.get('name', 'foe')} flees to {to} behind lock {', '.join(shut)} with no key in {rn}")
+                for k in sorted(fk & found):
+                    if to not in reach_rooms(by, start, found - {k}):
+                        warns.append(f"{rn}: {f.get('name', 'foe')} carries key {k} and flees past its lock to {to}; the key goes out of reach{where}")
+    return errs, warns
 
 
 def cmd_session_end(a):

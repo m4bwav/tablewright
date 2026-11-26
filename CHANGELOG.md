@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.22.0 (2026-11-26)
+- `rooms --keys` with several entrances: every room with `entry: true` is checked, so a key out of reach from any one entrance is flagged (else the first room is the entrance). Idea from Dungeons on Demand: Insidious Experiments, p. 5.
+- `rooms --keys` multi-key locks: a lock given as a list needs all its keys; a key reachable only through that lock is flagged. Idea from Dungeons on Demand: Old Habits, pp. 18, 24.
+- `rooms --keys` fleeing foes: room `foes: [{name, flee_to, keys}]`; fails a `flee_to` room that does not exist, warns when the foe flees behind a lock its room holds no key for, and when a foe carries a key past that key's lock. Ideas from Lord of Gloomthrone, pp. 15-18, Mischief Makers, p. 12, and Insidious Experiments, pp. 5, 19.
+- All rules are ours; no book text copied. 3 new tests (211 total).
+
 ## 0.21.0 (2026-11-26)
 - `morale --leader-cumulative N [--seed S]`: after the leader falls, flee chance +N% a round; per-round cumulative odds (to 100% or 10 rounds) and a seeded d100 per round naming the round they flee. Idea from DD2 Stealing the Night Away, p. 5.
 - `encounter --boss-dpr X --pc-hp a,b,c`: warns when the boss's all-hit damage a round drops the lowest PC from full, and suggests healing or a buffer first. `--pc-hp` now takes a list (the lowest counts). Idea from Dungeons on Demand: Devils in the Details, p. 24.
