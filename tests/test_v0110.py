@@ -123,3 +123,35 @@ def test_attendance(tmp_path):
     r = run("attendance", f, "--present", "3")
     assert "half" not in r.stdout and "collective" in r.stdout
     assert run("attendance", f, "--present", "5").returncode == 2
+
+
+def test_trap(tmp_path):
+    ok = {"name": "pit", "trigger": "plate", "detection": "loose dust", "disable": "wedge", "effect": "fall", "severity": "setback"}
+    assert run("trap", jw(tmp_path, "t.json", [ok])).returncode == 0
+    r = run("trap", jw(tmp_path, "b.json", [{"name": "dart", "trigger": "wire", "severity": "lethal"}]))
+    assert r.returncode == 1 and "dart: no detection" in r.stdout and "severity 'lethal'" in r.stdout
+
+
+def test_downtime(tmp_path):
+    good = {"name": "run a shop", "time": "a week", "cost": "upkeep", "repeatable": True, "outcomes": "shop.csv", "hook": "a rival"}
+    assert run("downtime", jw(tmp_path, "d.json", [good])).returncode == 0
+    r = run("downtime", jw(tmp_path, "b.json", [{"name": "rumor", "time": "days", "repeatable": True}]))
+    assert r.returncode == 1 and "no cost or sink" in r.stdout and "no outcomes table" in r.stdout
+
+
+def test_npcs_major(tmp_path):
+    f = tmp_path / "n.md"
+    f.write_text("## NPCs\n- Vel: tall; counting coins; wants the map because debt; major: true; ideal: order; bond: her ship\n"
+                 "- Rook: short; sweeping; knows a door because bored\n", encoding="utf-8")
+    r = run("npcs", f)
+    assert r.returncode == 1 and "Vel: major NPC with no flaw or secret" in r.stdout and "Rook" not in r.stdout
+    f.write_text("## NPCs\n- Vel: tall; counting coins; wants the map because debt; major: true; ideal: order; "
+                 "bond: her ship; secret: she sank it\n", encoding="utf-8")
+    assert run("npcs", f).returncode == 0
+
+
+def test_item_reward_condition(tmp_path):
+    r = run("item", jw(tmp_path, "i.json", [{"name": "river blessing", "reward": "blessing"}]))
+    assert r.returncode == 1 and "no condition or expectation" in r.stdout
+    r = run("item", jw(tmp_path, "j.json", [{"name": "river blessing", "reward": "blessing", "expectation": "guard the ford"}]))
+    assert r.returncode == 0

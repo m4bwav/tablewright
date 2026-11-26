@@ -13,7 +13,11 @@
 - `tt.py prep`: fights may carry `stakes: position|assets|character|party`; all rated fights at one level warn, a climax below character warns. Idea from Arbiter of Worlds, ch. 15, pp. 90-91.
 - `session-log` gains `ended_mid_fight:` and `recap:` lines; `review` warns on a mid-fight stop and on a log with no recap. Idea from Arbiter of Worlds, ch. 10, pp. 61-62.
 - `tt.py attendance ROSTER --present N [--dynamic collective|competitive|individualist]`: warns at half or fewer present and says how to handle absent PCs for the group's dynamic. Idea from Arbiter of Worlds, ch. 12, p. 77.
-- 11 new tests; all wording, steps and numbers are ours and unverified.
+- `tt.py trap FILE`: each trap needs a trigger, detection, disable method, effect and a severity band (setback, dangerous, deadly); mostly deadly warns. Idea from the D&D 5e Dungeon Master's Guide (2014), ch. 5, pp. 120-122. No DCs or damage numbers included.
+- `tt.py downtime FILE`: each activity needs a time cost and a money cost or sink; repeatable ones need an outcomes table; warns on no hook or one that replaces adventuring. Idea from the 5e DMG, ch. 6, pp. 127-132.
+- `tt.py npcs`: a card tagged `major: true` also needs `ideal:`, `bond:` and `flaw:` (or `secret:`). Idea from the 5e DMG, ch. 4, pp. 89-91.
+- `tt.py item`: an entry with `reward:` (a blessing, title or favour, not an item) needs a `condition` or `expectation`. Idea from the 5e DMG, ch. 7, p. 227.
+- 15 new tests; all wording, steps and numbers are ours and unverified.
 
 ## 0.10.0 (2026-11-26)
 - `tt.py safety`: optional `comfort` per player and topic (none, offscreen, limited, full) and `planned` levels; each topic takes the lowest player's level and a planned level above it fails. Idea from the D&D 3.5 Advanced GM guide (Dungeon Master's Guide II era, "Sensitive Subjects"). Empty `takebacks` or `info_flow` warn; idea from the D&D 3.5 Dungeon Master's Guide.

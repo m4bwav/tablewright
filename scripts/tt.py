@@ -22,6 +22,8 @@ Commands:
   hirelings   hireling loyalty from pay, treatment, charisma; --roll a check
   district    check city district cards (watch, bribe, gate, curfew, owner)
   chase       seeded city pursuit with complications
+  trap        check traps (trigger, detection, disable, effect, severity band)
+  downtime    check downtime activities (time, cost or sink, outcome table)
   attendance  players present against the roster; advice for absent PCs
   licence     notices for the bundled rules tables
 
@@ -703,6 +705,9 @@ def cmd_sessionlog(a):
     print(SESSION_LOG.format(n=a.session), end="")
 
 
+NPC_DEPTH = ("ideal", "bond", "flaw")
+
+
 def cmd_npcs(a):
     """Three-line NPC cards: '- Name: look; doing now; hook because why'."""
     sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
@@ -713,6 +718,13 @@ def cmd_npcs(a):
     for n in npcs:
         name, _, rest = n.partition(":")
         parts = [x.strip() for x in rest.split(";")]
+        extra = {p.split(":", 1)[0].strip().lower(): p.split(":", 1)[1].strip()
+                 for p in parts if ":" in p and p.split(":", 1)[0].strip().lower() in NPC_DEPTH + ("major", "secret")}
+        parts = [p for p in parts if not (":" in p and p.split(":", 1)[0].strip().lower() in extra)]
+        if extra.get("major", "").lower() in ("true", "yes"):
+            for k in NPC_DEPTH:
+                if not extra.get(k) and not (k == "flaw" and extra.get("secret")):
+                    errs.append(f"{name.strip()}: major NPC with no {k}" + (" or secret" if k == "flaw" else ""))
         if len(parts) != 3 or not all(parts):
             errs.append(f"{name.strip()}: want three parts 'look; doing now; hook because why'")
         elif "because" not in parts[2].lower():
@@ -1216,6 +1228,11 @@ def cmd_item(a):
     errs, warns = [], []
     for it in items if isinstance(items, list) else [items]:
         n, b, d = it.get("name", "?"), it.get("benefit_tier"), it.get("drawback_tier")
+        if it.get("reward"):
+            if not (it.get("condition") or it.get("expectation")):
+                errs.append(f"{n}: {it['reward']} reward with no condition or expectation (what the giver expects, "
+                            "and what makes it lapse)")
+            continue
         if b not in TIERS:
             errs.append(f"{n}: benefit_tier must be one of {TIERS}")
         elif not d:
@@ -1751,6 +1768,55 @@ def cmd_chase(a):
     print(f"after {a.rounds} rounds the lead is {lead}: the quarry goes to ground; search or let them go")
 
 
+TRAP_FIELDS = ("trigger", "detection", "disable", "effect")
+TRAP_BANDS = ("setback", "dangerous", "deadly")
+
+
+def load_list(path, key):
+    d = json.loads(Path(path).read_text(encoding="utf-8"))
+    d = d.get(key, []) if isinstance(d, dict) else d
+    if not d:
+        die(f"no {key}")
+    return d
+
+
+def cmd_trap(a):
+    """Traps JSON list: trigger, detection, disable, effect and a severity band each."""
+    traps = load_list(a.file, "traps")
+    errs = []
+    for t in traps:
+        n = t.get("name") or "?"
+        for f in TRAP_FIELDS:
+            if not t.get(f):
+                errs.append(f"{n}: no {f}")
+        if t.get("severity") not in TRAP_BANDS:
+            errs.append(f"{n}: severity {t.get('severity')!r}, use {', '.join(TRAP_BANDS)}")
+    warns = []
+    deadly = [t for t in traps if t.get("severity") == "deadly"]
+    if deadly and len(deadly) * 2 > len(traps):
+        warns.append(f"{len(deadly)} of {len(traps)} traps are deadly; most should cost resources, not lives")
+    report(errs, warns, f"{len(traps)} trap(s) with all four parts and a band")
+
+
+def cmd_downtime(a):
+    """Downtime activities JSON list: time cost and money cost or sink; repeatable ones need an outcome table."""
+    acts = load_list(a.file, "activities")
+    errs, warns = [], []
+    for x in acts:
+        n = x.get("name") or "?"
+        if not x.get("time"):
+            errs.append(f"{n}: no time cost")
+        if not (x.get("cost") or x.get("sink")):
+            errs.append(f"{n}: no cost or sink (money in, or where the money goes)")
+        if x.get("repeatable") and not x.get("outcomes"):
+            errs.append(f"{n}: repeatable with no outcomes table")
+        if x.get("replaces_adventure"):
+            warns.append(f"{n}: replaces adventuring; downtime should feed play, not stand in for it")
+        if not x.get("hook"):
+            warns.append(f"{n}: no hook (a lead the activity can turn up)")
+    report(errs, warns, f"{len(acts)} downtime activit{'y' if len(acts) == 1 else 'ies'}")
+
+
 ABSENT_PCS = {
     "collective": "the group shares one goal: absent PCs stay with the group as quiet background, take no risks and earn the same rewards",
     "competitive": "players pursue rival aims: absent PCs step out of the story (busy elsewhere) so nobody gains or loses ground while away",
@@ -1920,6 +1986,10 @@ def main(argv=None):
     s.add_argument("roster"); s.add_argument("--present", type=int, required=True)
     s.add_argument("--dynamic", choices=list(ABSENT_PCS), default="collective")
     s.set_defaults(fn=cmd_attendance)
+    s = sub.add_parser("trap", help="check traps: trigger, detection, disable, effect, severity")
+    s.add_argument("file"); s.set_defaults(fn=cmd_trap)
+    s = sub.add_parser("downtime", help="check downtime activities: time, cost or sink, outcomes")
+    s.add_argument("file"); s.set_defaults(fn=cmd_downtime)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
