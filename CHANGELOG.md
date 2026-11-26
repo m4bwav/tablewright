@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.0 (2026-11-26)
+- `tt.py travel --watches N [--day-odds] [--watch-odds] [--no-fire]`: a day roll with a time slot, one check per night watch, a cold camp adding odds, weather checks every 4 hours, and the chance of at least one night event. Idea from a wilderness encounters supplement (pp. 2-3).
+- `tt.py weather FILE.json`: user weather states with a change chance per check, effect flags, and encounters to reroll when `implausible_in` the current state. Same source, p. 3.
+- `tt.py table check FILE.csv --dice 2d10` (gaps, overlaps, each row's probability for any dice expression) and `tt.py table lint FILE.json` (each encounter needs hook, truth, a skill-check follow-up and a morale rule). Same source, pp. 2-4.
+- `tt.py encounter --count-foe DICExLEVEL`: min, mean and max XP of a dice-range foe count; notes when the max tops the deadliest band. Same source, pp. 4 and 15.
+- `tt.py unit` (troop HP to unit points, one damage per hit, flags hit-only-on-20; `--hero` divides hero damage by scale and adds attack sequences), `tt.py command` (activation cost per unit against leadership, division cap), `morale --break N` and `morale --dice 2d6 --bands`, `battle --resolve` (expected hits per round to a one-third break point, then pursuit throws). Ideas from Domains at War: Battles (Autarch), pp. 12-27 and 65.
+- `tt.py march`, `tt.py supply` (weekly cost, weighted line against a cap; `--forage levy|loot` with families lost), `tt.py siege`, `tt.py upkeep --weeks N`. Ideas from Domains at War: Campaigns (Autarch), pp. 54-59, 77-86.
+- `tt.py forage TERRAIN --table FILE` (check, 1d4 finds, 2d6 rows, common middle, conditions, a rare swap on the tails) and `forage --check`, `tt.py craft`, `tt.py identify`, `tt.py sell`. Ideas from a herbalism and alchemy supplement (pp. 2-5, 11-12). Herb foraging is `forage`; army foraging is `supply --forage`.
+- Every cost, table and band comes from the user's JSON or our own defaults; no book tables are copied. 15 new tests (138 total).
+
 ## 0.14.0 (2026-11-26)
 - `tt.py xp FILE.json`: counts only faced foes that were not overmatched, with outcome killed, surrendered, routed or persuaded; a routed `group` counts once; fails when the `story` award tops the foe XP or 1/10 of any PC's `xp_to_next` (our cap); splits among survivors. Idea from the AD&D 2e Dungeon Master's Guide (TSR), pp. 101-103.
 - `tt.py morale --rating N --mod NAME=V --seed S [--roll R]`: 2d10 against the modified rating; over it breaks. No `morale` command existed (0.8.0 only added `encounter --morale`). Idea from the 2e DMG, pp. 154-155.
