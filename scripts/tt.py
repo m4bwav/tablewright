@@ -210,15 +210,26 @@ def solo_horde_warnings(a):
                           ("terrain", "the ground it uses")):
             if not getattr(a, flag):
                 w.append(f"solo with no --{flag}: {why}; a lone foe with only attacks folds to action economy")
-    if a.spike and not a.pc_hp:
+    if (a.spike or a.boss_dpr) and not a.pc_hp:
         w.append("--spike with no --pc-hp: give the lowest PC's full HP")
     for sp in a.spike or []:
         if a.pc_hp and sp >= a.pc_hp:
             w.append(f"a foe's burst of {sp} can drop a PC from full ({a.pc_hp} HP) in one turn; cut it or telegraph it")
+    if a.boss_dpr and a.pc_hp and a.boss_dpr >= a.pc_hp:
+        w.append(f"boss all-hit damage {a.boss_dpr} a round kills the lowest PC ({a.pc_hp} HP) in one round;"
+                 " give healing, temp HP or a buffer before the fight")
     if len(a.foe) > HORDE and not a.wave:
         w.append(f"{len(a.foe)} foes at once with no --wave: send waves of about {HORDE_WAVE} with a breather between,"
                  " or fold weak ones into a --throng")
     return w
+
+
+def pc_hp_arg(v):
+    """'24' or '24,31,40' -> the lowest PC's full HP."""
+    try:
+        return min(int(x) for x in v.split(",") if x.strip())
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"--pc-hp wants a number or a,b,c, got {v!r}")
 
 
 def split_roles(foes):
@@ -3144,6 +3155,8 @@ def cmd_morale(a):
         except ValueError:
             die(f"--mod NAME=V, got {m}")
         print(f"{k}: {int(v):+d}")
+    if a.leader_cumulative is not None:
+        return morale_leader(a)
     if a.break_units is not None or a.dice == "2d6":
         if a.dice == "2d6" and a.rating is None:
             die("--dice 2d6 needs --rating (the morale score)")
@@ -3156,6 +3169,33 @@ def cmd_morale(a):
         rng = random.Random(a.seed)
         roll = rng.randint(1, 10) + rng.randint(1, 10)
     print(f"2d10 {roll} vs {target}: " + ("breaks (flee or surrender)" if roll > target else "holds"))
+
+
+LEADER_ROUNDS = 10  # list at most this many rounds after the leader falls; our cap
+
+
+def morale_leader(a):
+    """After the leader falls the flee chance rises N% a round; print the odds they have fled by each round."""
+    import random
+    n = a.leader_cumulative
+    if not 1 <= n <= 100:
+        die("--leader-cumulative N wants 1 to 100 (percent added each round)")
+    rng = random.Random(a.seed) if a.seed is not None else None
+    stay, fled = 1.0, None
+    for r in range(1, LEADER_ROUNDS + 1):
+        p = min(100, n * r)
+        stay *= 1 - p / 100
+        line = f"round {r}: {p}% this round, {round((1 - stay) * 100)}% fled by now"
+        if rng and fled is None:
+            roll = rng.randint(1, 100)
+            line += f", d100 {roll}" + (" flee" if roll <= p else " stay")
+            if roll <= p:
+                fled = r
+        print(line)
+        if p >= 100:
+            break
+    if rng:
+        print(f"they flee in round {fled}" if fled else f"they stay through round {r}")
 
 
 COIN_CAP = 5  # our default: more coins than this in one session is generous
@@ -3236,7 +3276,70 @@ def cmd_rooms(a):
         streak = streak + 1 if r.get("enemies") else 0
         if streak == 3:
             warns.append(f"{n}: third room in a row with enemies; give one a breather")
+    if a.keys:
+        errs += lock_key_errors(rooms)
     report(errs, warns, f"{len(rooms)} rooms")
+
+
+def reach_rooms(by, start, found):
+    """Rooms open from start with these keys in hand."""
+    seen, todo = set(), [start]
+    while todo:
+        rn = todo.pop()
+        r = by.get(rn)
+        if rn in seen or r is None or not set(r.get("locks") or []) <= found:
+            continue
+        seen.add(rn)
+        todo += list(r.get("exits") or [])
+    return seen
+
+
+def lock_key_errors(rooms):
+    """Rooms may give locks: [..] and keys: [..]; with exits: [room names] the first room is the entrance."""
+    errs, locks, keys = [], {}, {}
+    for r in rooms:
+        for k in r.get("locks") or []:
+            locks.setdefault(k, []).append(r.get("name", "?"))
+        for k in r.get("keys") or []:
+            keys.setdefault(k, []).append(r.get("name", "?"))
+    for k in sorted(set(locks) - set(keys)):
+        errs.append(f"lock {k} ({', '.join(locks[k])}) has no key")
+    for k in sorted(set(keys) - set(locks)):
+        errs.append(f"key {k} ({', '.join(keys[k])}) opens no lock")
+    for k in sorted(set(locks) & set(keys)):
+        for rn in sorted(set(locks[k]) & set(keys[k])):
+            errs.append(f"key {k} is in {rn}, the room it unlocks")
+    if not any("exits" in r for r in rooms):
+        return errs
+    by = {r.get("name", "?"): r for r in rooms}
+    start = rooms[0].get("name", "?")
+
+    def reach(given):
+        found, grew = set(given), True
+        while grew:
+            grew, seen, todo = False, set(), [start]
+            while todo:
+                rn = todo.pop()
+                r = by.get(rn)
+                if rn in seen or r is None or not set(r.get("locks") or []) <= found:
+                    continue
+                seen.add(rn)
+                new = set(r.get("keys") or []) - found
+                if new:
+                    found |= new
+                    grew = True
+                todo += list(r.get("exits") or [])
+        return found
+
+    found = reach(())
+    for k in sorted(set(keys) - found):
+        if any(f"key {k} is in" in e for e in errs):
+            continue
+        if set(keys[k]) & reach_rooms(by, start, reach({k})):
+            errs.append(f"key {k} can only be reached through its own lock")
+        else:
+            errs.append(f"key {k} is never reachable from {start}")
+    return errs
 
 
 def cmd_session_end(a):
@@ -4975,7 +5078,8 @@ def main(argv=None):
             s.add_argument("--solo", action="store_true", help="one foe against the party; wants --tactics, --fallback, --terrain")
             s.add_argument("--tactics"); s.add_argument("--fallback"); s.add_argument("--terrain")
             s.add_argument("--spike", type=int, action="append", help="one foe's max burst damage in a turn; repeat per foe")
-            s.add_argument("--pc-hp", type=int, help="the lowest PC's full HP, for --spike")
+            s.add_argument("--pc-hp", type=pc_hp_arg, help="PC full HP, one number or a,b,c (the lowest counts), for --spike and --boss-dpr")
+            s.add_argument("--boss-dpr", type=int, help="the boss's damage a round if every attack hits")
             s.add_argument("--exit", help="the party's way out of a fight above the top band")
         else:
             s.add_argument("--threat", default="moderate")
@@ -5226,10 +5330,12 @@ def main(argv=None):
     s.add_argument("--break", dest="break_units", type=int, help="starting units: print the army break point")
     s.add_argument("--dice", choices=["2d10", "2d6"], default="2d10", help="2d6: odds of each band for 2d6 + rating + mods")
     s.add_argument("--bands", default="rout<=4,fall back<=7,hold", help="2d6 bands, low to high")
+    s.add_argument("--leader-cumulative", type=int, metavar="N", help="after the leader falls, flee chance +N%% a round")
     s.add_argument("--seed", type=int); s.add_argument("--roll", type=int); s.set_defaults(fn=cmd_morale)
     s = sub.add_parser("awards", help="check per-player awards, milestones and coins in session logs")
     s.add_argument("logs", nargs="+"); s.set_defaults(fn=cmd_awards)
     s = sub.add_parser("rooms", help="check rooms: timer, threat, treat, stake, wonder, dials")
+    s.add_argument("--keys", action="store_true", help="check locks and keys: orphans, a key behind its own lock")
     s.add_argument("file"); s.set_defaults(fn=cmd_rooms)
     s = sub.add_parser("session-end", help="rounds left and the final turns")
     s.add_argument("--seed", type=int); s.add_argument("--die", type=int, default=6)
