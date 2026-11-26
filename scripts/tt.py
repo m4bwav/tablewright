@@ -312,6 +312,45 @@ def cmd_sheet(a):
         sys.stdout.write(md)
 
 
+def prep_sections(text):
+    sec, cur = {}, None
+    for line in text.splitlines():
+        if line.startswith("## "):
+            cur = line[3:].strip().lower()
+            sec[cur] = []
+        elif cur is not None and line.strip():
+            sec[cur].append(line.strip())
+    return sec
+
+
+def cmd_prep(a):
+    """Check a session card: an opening, N leads, NPCs that each want something, fights with a way out."""
+    sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
+    bullets = lambda k: [l[2:].strip() for l in sec.get(k, []) if l[:2] in ("- ", "* ")]
+    errs, warns = [], []
+    if not sec.get("opening"):
+        errs.append("no ## Opening: write how the session starts")
+    leads = bullets("leads")
+    if len(leads) != a.leads:
+        errs.append(f"## Leads has {len(leads)}, want {a.leads}: enough for a real choice, few enough to prep")
+    npcs = bullets("npcs")
+    if not npcs:
+        errs.append("no ## NPCs bullets")
+    for n in npcs:
+        if ":" not in n or not n.split(":", 1)[1].strip():
+            errs.append(f"NPC without a goal (write 'Name: what they want now'): {n}")
+    for f in bullets("fights"):
+        if "out:" not in f.lower():
+            warns.append(f"fight without a way to end early (add 'out: ...'): {f}")
+    for w in warns:
+        print("warn: " + w)
+    for e in errs:
+        print("error: " + e)
+    if errs:
+        sys.exit(1)
+    print(f"ok: opening, {len(leads)} leads, {len(npcs)} NPCs with goals")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -336,6 +375,8 @@ def main(argv=None):
     s.add_argument("character"); s.add_argument("--out"); s.set_defaults(fn=cmd_sheet)
     s = sub.add_parser("check", help="check a character JSON")
     s.add_argument("character"); s.set_defaults(fn=cmd_check)
+    s = sub.add_parser("prep", help="check a session prep card")
+    s.add_argument("card"); s.add_argument("--leads", type=int, default=3); s.set_defaults(fn=cmd_prep)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)

@@ -20,6 +20,10 @@ Tables and sources: [references/encounters.md](references/encounters.md).
 
 `tt.py tracker init "Hero:17:20" "Goblin:12:6"` (name:initiative:hp), then `tracker next`, `tracker hit Goblin 5`, `tracker heal Hero 4`, `tracker cond Hero "frightened 1"` (`--remove` to clear), `tracker add "Reinforcement:9:12"`, `tracker show`. Downed combatants are skipped. The file is `TABLEWRIGHT_HOME/tracker.json` unless `--file` is given; one file per running fight.
 
+## Session prep
+
+Before a session, write a card in markdown with `## Opening`, `## Leads` (three bullets), `## NPCs` (`Name: what they want now`) and optional `## Fights` (each with `out: ...`, a way the fight can end before anyone dies or flees), then `tt.py prep card.md`. It exits 1 on a missing opening, the wrong number of leads (`--leads N` to change) or an NPC without a goal, and warns on a fight with no way out. Keep the card short: prep what the table will actually touch.
+
 ## Characters
 
 - Any system: keep a character as JSON in the common schema ([references/characters.md](references/characters.md)), `tt.py check char.json`, then `tt.py sheet char.json --out sheet.md` for a one-page sheet.
