@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.12.0 (2026-11-26)
+- `tt.py oneshot card.json`: a one-shot card with `bond` (professional, family, forced), `plot`, `finish` and `pregens` (`role`, 2+ `questions`, `stake`); fails on no bond, no finish, a pregen with no stake or under two questions; warns on shared roles and a finish that is only a payout. Idea from the Kobold Guide to Gamemastering (Kobold Press), pp. 80-82.
+- `tt.py tpk --cause gm-error|bad-luck|player-error [--keep-pcs]`: a support script and a remedy per cause (refight or concede; a short, sure recovery group; let it stand or a costly return); refuses "lesson" and "reset". Idea from the Kobold Guide to Gamemastering, pp. 142-144.
+- `tt.py prep`: an opposing NPC (`opposed: yes`) with fewer than two `where:` places warns; `villain` cards warn with no `absent:` (what they do if the party never comes) and on a single `where:`. Idea from the Kobold Guide to Gamemastering, pp. 62-63 and 112.
+- `tt.py prep`: a bullet with `roll:` (one check gating progress, also in a new `## Obstacles` section) warns with no `on_fail:` of time, alarm, clock, cost or complication. Idea from the Kobold Guide to Roleplaying, p. 25.
+- `tt.py alert init|raise|lower|show`: a dungeon alert track in `TABLEWRIGHT_HOME/alert.json` with 2 to 5 tiers, a reason per change, effects per tier and `--merge TIER:a+b` groups that join forces. Idea from the Kobold Guide to Dungeons, pp. 40-41 and 78-79.
+- `tt.py prep`: a card with `## Rooms` or `## Dungeon` warns with no `## Rest` (`where:`, `cost:`). Idea from the Kobold Guide to Dungeons, pp. 75-76.
+- `tt.py backlog backlog.json [--min 5 --max 15 --retell 3 --levelup]`: open hooks within a band, each with `worsens`, one tied to a PC or past event, retold hooks flagged, a what-changed prompt per hook at level up. Idea from the Kobold Guide to Plots and Campaigns, pp. 15-16.
+- `tt.py prep`: fights may carry `memento:` (clue, loss, gain, plea, curse, known-foe); a card where no fight has one warns. Idea from the Kobold Guide to Plots and Campaigns, p. 14.
+- `tt.py campaign`: optional `milestones` (discovery, reversal, change_in_view by session) fail out of order or at or after the climax and warn when one is missing; optional `org` warns on under 4 minion types and sergeants with no plan. Idea from the Kobold Guide to Plots and Campaigns, p. 4.
+- `session-log` gains `snapshot:` and `restart:`; `review` warns when a log that ended mid-fight lacks either. Idea from the Kobold Guide to Plots and Campaigns, p. 19.
+- `tt.py negotiate --start ATT --exchange MOD ...`: a multi-step negotiation, 2d6 per exchange, at most one attitude step each, talks break at hostile. `travel --navigate BONUS --seed N` rolls a getting-lost check per day off a known route; `--track-age DAYS [--rain --group N]` prints a tracking target. Idea from the D&D 5e Dungeon Master's Guide (2014), social interaction and wilderness survival.
+- 10 new tests; all wording, steps and numbers are ours and unverified.
+
 ## 0.11.0 (2026-11-26)
 - `tt.py calendar FILE [--drift 3]`: a world-day ledger per group; prints each group's timeline and warns when split groups drift 3 or more days apart. Idea from the 1979 AD&D Dungeon Masters Guide (time keeping, pp. 37-50).
 - `tt.py hirelings FILE [--roll NAME --event E --seed N]`: hireling loyalty from pay against the going rate, treatment and the leader's charisma modifier; lists the events that call for a check (unpaid, abused, sent ahead, bribe, leader down) and rolls one. Idea from the 1979 AD&D Dungeon Masters Guide (pp. 169-170).

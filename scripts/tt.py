@@ -25,6 +25,11 @@ Commands:
   trap        check traps (trigger, detection, disable, effect, severity band)
   downtime    check downtime activities (time, cost or sink, outcome table)
   attendance  players present against the roster; advice for absent PCs
+  oneshot     check a one-shot card (bond, plot, finish, pregens with stakes)
+  tpk         remedy after a total party kill, by cause
+  alert       dungeon alert track (init, raise, lower, show)
+  backlog     check a campaign hook backlog (5 to 15 open, worsens, ties)
+  negotiate   multi-step negotiation, one attitude step per exchange
   licence     notices for the bundled rules tables
 
 Exit 2 is a usage or validation error.
@@ -509,6 +514,8 @@ def tag(text, key):
 DIFF_RANK = {"trivial": 0, "easy": 1, "low": 1, "moderate": 2, "hard": 3, "high": 3, "severe": 4, "deadly": 4, "extreme": 5}
 STAKES = ("position", "assets", "character", "party")
 LEVERS = {"damage": ("damage",), "disruption": ("hazard", "terrain"), "duration": ("timer", "clock")}
+FAIL_KINDS = ("time", "alarm", "clock", "cost", "complication")
+MEMENTOS = ("clue", "loss", "gain", "plea", "curse", "known-foe")
 
 
 def cmd_prep(a):
@@ -593,6 +600,32 @@ def cmd_prep(a):
             warns.append(f"climax risks only {s}; a climax should put a character or the party on the line: {f}")
     if len(stakes) >= 2 and len({s for _, s in stakes}) == 1:
         warns.append(f"every rated fight risks {stakes[0][1]}; vary what is at stake")
+    for x in items + bullets("obstacles"):
+        if tag(x, "roll"):
+            of = tag(x, "on_fail")
+            if not of:
+                warns.append(f"one roll gates progress with no on_fail: (time, alarm, clock, cost or complication): {x}")
+            elif of.split()[0].strip(",.") not in FAIL_KINDS:
+                warns.append(f"on_fail: {of}; a failure should move play: " + ", ".join(FAIL_KINDS))
+    fights = bullets("fights")
+    if fights and not any(tag(f, "memento") for f in fights):
+        warns.append("no fight leaves a memento: (" + ", ".join(MEMENTOS) + "); give one fight something to remember")
+    for f in fights:
+        m = tag(f, "memento")
+        if m and m.split()[0].strip(",.") not in MEMENTOS:
+            warns.append(f"memento: {m}, use " + ", ".join(MEMENTOS))
+    for n in npcs:
+        if tag(n, "opposed") in YES or tag(n, "foe") in YES:
+            places = [p for p in tag(n, "where").replace("|", ",").split(",") if p.strip()]
+            if len(places) < 2:
+                warns.append(f"opposing NPC found in {len(places)} place(s); give two or more (where: a, b) "
+                             f"so the party can meet them whichever way they go: {n}")
+    if "rooms" in sec or "dungeon" in sec:
+        rest = bullets("rest")
+        if not rest:
+            warns.append("dungeon card with no ## Rest: say where the party can rest (where:) and what it costs (cost:)")
+        elif not any("where:" in r.lower() for r in rest) or not any("cost:" in r.lower() for r in rest):
+            warns.append("## Rest wants a where: line and a cost: line (a clock, an alarm or a spent resource)")
     false = [l for l in leads if "(false)" in l.lower()]
     if false and len(false) >= len(leads) - len(false):
         warns.append(f"{len(false)} false leads of {len(leads)}; keep them fewer than the real ones")
@@ -695,6 +728,8 @@ SESSION_LOG = """# Session {n} log
 - where the next session starts
 - ending: countdown | hook | choice | ran-long (how this session stopped)
 - ended_mid_fight: no
+- snapshot: (if mid-fight: positions, HP, effects, initiative)
+- restart: (if mid-fight: the line that starts the next session)
 - recap: two lines read aloud to open next session
 """
 ENDINGS = ("countdown", "hook", "choice", "ran-long")
@@ -855,6 +890,11 @@ def cmd_villain(a):
         if not key("escape") and [v.lower() for v in key("captured_ok")] != ["true"]:
             warns.append(f"{name}: no escape: (how they avoid capture, planned before the showdown); "
                          "or 'captured_ok: true' if capture is a fine ending")
+        if not key("absent"):
+            warns.append(f"{name}: no absent: (what they do if the party never comes for them)")
+        where = [p for w in key("where") for p in w.replace("|", ",").split(",") if p.strip()]
+        if key("where") and len(where) < 2:
+            warns.append(f"{name}: met in one place only; give two or more (where: a, b) so a missed scene is not a lost villain")
     if not sec:
         die("no '## Name' villain sections")
     report(errs, warns, f"{len(sec)} villains")
@@ -926,7 +966,41 @@ def cmd_campaign(a):
                 errs.append(f"sign {t!r}: session {when} is not before the climax (session {at})")
         if signs and not isinstance(at, int):
             warns.append("climax has no session, so sign timing cannot be checked")
+    ms = c.get("milestones", [])
+    if ms:
+        at = (cl or {}).get("session")
+        seen = {}
+        for m in ms:
+            k, s = m.get("kind"), m.get("session")
+            if k not in MILESTONES:
+                errs.append(f"milestone kind {k!r}, use " + ", ".join(MILESTONES))
+                continue
+            if not isinstance(s, int):
+                errs.append(f"milestone {k}: no session")
+                continue
+            seen[k] = s
+            if isinstance(at, int) and s >= at:
+                errs.append(f"milestone {k} at session {s} is not before the climax (session {at})")
+        order = [k for k in MILESTONES if k in seen]
+        for x, y in zip(order, order[1:]):
+            if seen[x] >= seen[y]:
+                errs.append(f"milestone {y} (session {seen[y]}) should come after {x} (session {seen[x]})")
+        for k in MILESTONES:
+            if k not in seen:
+                warns.append(f"no {k} milestone")
+    org = c.get("org")
+    if org:
+        if len(org.get("minions", [])) < 4:
+            warns.append(f"org has {len(org.get('minions', []))} minion types, want 4+ so fights vary")
+        for sg in org.get("sergeants", []):
+            if not sg.get("plan"):
+                warns.append(f"sergeant {sg.get('name', '?')}: no plan of their own")
+        if not org.get("sergeants"):
+            warns.append("org has no sergeants (mid-level leaders with their own plans)")
     report(errs, warns, f"{len(adv)} adventures, {len(c.get('pcs', []))} PCs with plotlines")
+
+
+MILESTONES = ("discovery", "reversal", "change_in_view")
 
 
 FOLLOWUP_SHAPES = ("framed", "accused", "mistaken", "ambush")
@@ -1494,10 +1568,14 @@ def cmd_review(a):
     hi, weak, fixes, ends = {}, {}, [], {}
     for f in a.logs:
         text = Path(f).read_text(encoding="utf-8")
-        recap = False
+        recap, mid, have = False, False, set()
         for line in text.splitlines():
             k, _, v = line.lstrip("-* ").partition(":")
             v = v.strip().lower()
+            if k.strip().lower() in ("snapshot", "restart") and v and not v.startswith("("):
+                have.add(k.strip().lower())
+            if k.strip().lower() == "ended_mid_fight" and v in ("yes", "true", "y"):
+                mid = True
             if k.strip().lower() == "recap" and v and not v.startswith("two lines read aloud"):
                 recap = True
             if k.strip().lower() == "ended_mid_fight" and v in ("yes", "true", "y"):
@@ -1506,6 +1584,10 @@ def cmd_review(a):
                 ends[v] = ends.get(v, 0) + 1
                 if v not in ENDINGS:
                     print(f"warn: {f}: ending {v!r}, use " + ", ".join(ENDINGS))
+        for k in ("snapshot", "restart"):
+            if mid and k not in have:
+                print(f"warn: {f}: ended mid-fight with no {k}: line"
+                      + (" (positions, HP, effects)" if k == "snapshot" else " (how next session opens)"))
         if not recap:
             print(f"warn: {f}: no recap: line; write two lines to read aloud next session")
         sec = prep_sections(text)
@@ -1625,9 +1707,10 @@ def cmd_travel(a):
     over = max(0, a.hours - 8)
     if over:
         print(f"fatigue: {math.ceil(over)} point(s) a day from {over:g} hour(s) past 8; {math.ceil(over) * whole} over the trip")
+    travel_checks(a, whole)
 
 
-# 0.11.0: calendar, hirelings, districts, chases. Numbers and wording are ours.
+# 0.11.0 and up: calendar, hirelings, districts, chases. Numbers and wording are ours.
 def cmd_calendar(a):
     """World-day ledger JSON {"groups": {name: [{"day": N, "event": "..."}]}}: flags split groups that drift apart."""
     d = json.loads(Path(a.file).read_text(encoding="utf-8"))
@@ -1857,6 +1940,234 @@ def cmd_attendance(a):
         print(f"absent PCs ({a.dynamic}): {ABSENT_PCS[a.dynamic]}")
 
 
+# 0.12.0: one-shots, TPK triage, dungeon alert, hook backlog, negotiation, navigation. Numbers and wording are ours.
+ONESHOT_BONDS = ("professional", "family", "forced")
+ONESHOT_PLOTS = ("duty", "heist", "investigation", "survival", "other")
+LOOT_WORDS = ("loot", "treasure", "gold", "reward", "payday", "coin")
+DEED_WORDS = ("defeat", "escape", "stop", "save", "rescue", "decide", "choose", "choice", "confront", "reveal",
+              "survive", "win", "catch", "expose", "finish", "deliver", "seal", "kill", "capture")
+
+
+def cmd_oneshot(a):
+    """One-shot card JSON: a group bond, a plot shape, a finish scene, pregens with role, 2+ questions and a stake."""
+    c = json.loads(Path(a.card).read_text(encoding="utf-8"))
+    errs, warns = [], []
+    bond = str(c.get("bond") or "").lower()
+    if not bond:
+        errs.append("no bond: say why these characters are together (" + ", ".join(ONESHOT_BONDS) + ")")
+    elif bond not in ONESHOT_BONDS:
+        warns.append(f"bond {bond!r}; the usual kinds are " + ", ".join(ONESHOT_BONDS))
+    plot = str(c.get("plot") or "").lower()
+    if plot and plot not in ONESHOT_PLOTS:
+        warns.append(f"plot {plot!r}, use " + ", ".join(ONESHOT_PLOTS))
+    elif not plot:
+        warns.append("no plot: name the shape (" + ", ".join(ONESHOT_PLOTS) + ")")
+    finish = str(c.get("finish") or "").lower()
+    if not finish:
+        errs.append("no finish: write the scene that ends the night, so it ends in one sitting")
+    elif any(w in finish for w in LOOT_WORDS) and not any(w in finish for w in DEED_WORDS):
+        warns.append("finish is only a payout; end on a deed or a choice, with the loot after it")
+    pre = c.get("pregens", [])
+    if not pre:
+        errs.append("no pregens")
+    roles = {}
+    for p in pre:
+        n = p.get("name") or "?"
+        if not p.get("stake"):
+            errs.append(f"{n}: no stake (what this character personally wins or loses tonight)")
+        if len(p.get("questions") or []) < 2:
+            errs.append(f"{n}: {len(p.get('questions') or [])} question(s), want 2+ for the player to answer at the table")
+        r = str(p.get("role") or "").lower()
+        if not r:
+            warns.append(f"{n}: no role")
+        else:
+            roles.setdefault(r, []).append(n)
+    for r, ns in roles.items():
+        if len(ns) > 1:
+            warns.append(f"{' and '.join(ns)} share the role {r}; give each pregen its own job")
+    report(errs, warns, f"{len(pre)} pregen(s), bond {bond or '?'}, finish set")
+
+
+TPK_CAUSES = {
+    "gm-error": ("The fight was mis-built or a ruling went wrong. Own it out loud.",
+                 "Offer a refight from the start of the encounter with the fix in place, or concede: the party "
+                 "wakes up beaten but alive, and the foes take what they came for."),
+    "bad-luck": ("The dice turned on a fair fight. Say so, and say the choices were sound.",
+                 "Keep it short and sure: a recovery group (kin, comrades, hirelings) goes in for the bodies in one "
+                 "session, with the odds tilted their way, and a raise or a return waits at the end."),
+    "player-error": ("The party took a risk they were warned about. No blame; name the warning they had.",
+                     "Let the death stand and start fresh characters tied to the fallen, or run a story return "
+                     "that costs something real (a debt, a geas, a lost item)."),
+}
+TPK_KEEP = {
+    "gm-error": "they keep their characters: refight or concede, nothing else is needed",
+    "bad-luck": "they keep their characters: the party is captured, left for dead or pulled out by an ally instead of killed",
+    "player-error": "they keep their characters: the return comes with a lasting cost the table agrees to",
+}
+
+
+def cmd_tpk(a):
+    """Support script and remedy after a total party kill, chosen by cause."""
+    cause = a.cause.lower()
+    if cause in ("lesson", "reset", "punish", "punishment"):
+        die(f"{cause!r} is not a cause; a wipe is never a lesson to teach. Use gm-error, bad-luck or player-error")
+    if cause not in TPK_CAUSES:
+        die("--cause is one of " + ", ".join(TPK_CAUSES))
+    say, fix = TPK_CAUSES[cause]
+    print("1. Stop play. Thank the players; check in with anyone upset before any rules talk.")
+    print("2. " + say)
+    print("3. Remedy: " + fix)
+    if a.keep_pcs:
+        print("4. The players want their characters back: " + TPK_KEEP[cause] + ".")
+    else:
+        print("4. Ask whether the players want these characters back (--keep-pcs) before you pick for them.")
+    print("5. Decide together before the next session; write it in the session log under ending.")
+
+
+ALERT_EFFECTS = [
+    "calm: wandering check once an hour, guards at their posts",
+    "wary: wandering check every half hour, sentries doubled, doors barred",
+    "alarmed: wandering check in every room entered, patrols hunt the intruders, traps reset and armed",
+    "mustered: groups merge into strong points, the way out is watched",
+    "lockdown: the lair is held to the last; its owner gets ready to flee or bargain",
+]
+
+
+def alert_effect(tier, tiers):
+    return ALERT_EFFECTS[round(tier * (len(ALERT_EFFECTS) - 1) / tiers)]
+
+
+def cmd_alert(a):
+    """Dungeon alert track in a JSON file: init --tiers N, raise/lower --why, show."""
+    f = Path(a.file)
+    if a.action == "init":
+        if not 2 <= a.tiers <= 5:
+            die("--tiers 2 to 5")
+        merge = {}
+        for m in a.merge or []:
+            t, _, groups = m.partition(":")
+            if not t.isdigit() or not groups:
+                die(f"--merge {m!r}: write TIER:group+group")
+            merge[t] = [g.strip() for g in groups.split("+") if g.strip()]
+        d = {"tier": 0, "tiers": a.tiers, "merge": merge, "history": []}
+    else:
+        if not f.exists():
+            die(f"no alert track at {f}; run 'alert init' first")
+        d = json.loads(f.read_text(encoding="utf-8"))
+    if a.action in ("raise", "lower"):
+        if not a.why:
+            die("--why: say what raised or lowered the alert")
+        old = d["tier"]
+        d["tier"] = max(0, min(d["tiers"], old + (a.by if a.action == "raise" else -a.by)))
+        d["history"].append({"from": old, "to": d["tier"], "why": a.why})
+        if a.action == "raise" and old == d["tiers"]:
+            print("warn: already at the top tier")
+    if a.action != "show":
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(d, indent=1), encoding="utf-8")
+    t = d["tier"]
+    print(f"alert {t}/{d['tiers']}: {alert_effect(t, d['tiers'])}")
+    if d.get("merge", {}).get(str(t)):
+        print("merge now: " + " + ".join(d["merge"][str(t)]))
+    for h in d["history"][-3:]:
+        print(f"  {h['from']} -> {h['to']}: {h['why']}")
+    if t and a.action == "show":
+        print("lower it with time unseen, a believable cover story, or by removing the one who raised the alarm")
+
+
+BACKLOG_STATUS = ("live", "back-burner", "dropped")
+
+
+def cmd_backlog(a):
+    """Hook backlog JSON: live and back-burner hooks within a band, each worsening if ignored, some tied to the party."""
+    hooks = load_list(a.file, "hooks")
+    if a.min < 1 or a.max < a.min:
+        die("--min at least 1 and --max at least --min")
+    errs, warns = [], []
+    open_ = []
+    for h in hooks:
+        t = h.get("text") or "?"
+        st = str(h.get("status") or "live").lower()
+        if st not in BACKLOG_STATUS:
+            errs.append(f"{t}: status {st!r}, use " + ", ".join(BACKLOG_STATUS))
+            continue
+        if st == "dropped":
+            continue
+        open_.append(h)
+        if not h.get("worsens"):
+            warns.append(f"{t}: no worsens: (what gets worse if the party ignores it)")
+        heard = h.get("heard", 0)
+        if st == "live" and isinstance(heard, int) and heard > a.retell:
+            warns.append(f"{t}: heard {heard} times with no bite; retell it with new stakes or drop it")
+    if not a.min <= len(open_) <= a.max:
+        warns.append(f"{len(open_)} open hooks, want {a.min} to {a.max}: "
+                     + ("too few for a real choice" if len(open_) < a.min else "too many to keep alive"))
+    if open_ and not any(str(h.get("tie") or "").lower().startswith(("pc:", "past:")) for h in open_):
+        warns.append("no hook is tied to a PC (tie: pc:Name) or a past event (tie: past:what happened)")
+    if a.levelup:
+        print("level-up review: for each hook, what changed while the party was busy?")
+        for h in open_:
+            print(f"- {h.get('text', '?')} [{h.get('status', 'live')}]: what changed? worsens: {h.get('worsens', '?')}")
+    report(errs, warns, f"{len(open_)} open hook(s) of {len(hooks)}")
+
+
+ATTITUDES = ["hostile", "wary", "neutral", "open", "helpful"]
+
+
+def cmd_negotiate(a):
+    """Multi-step negotiation: start attitude, one 2d6 check per exchange, at most one step of shift each."""
+    import random
+    rng = random.Random(a.seed)
+    if a.start not in ATTITUDES:
+        die("--start is one of " + ", ".join(ATTITUDES))
+    i = ATTITUDES.index(a.start)
+    goal = ATTITUDES.index(a.goal)
+    mods = a.exchange or []
+    rolls = a.rolls or []
+    print(f"start: {a.start}; goal: {a.goal}")
+    for n, m in enumerate(mods, 1):
+        r = rolls[n - 1] if n - 1 < len(rolls) else rng.randint(1, 6) + rng.randint(1, 6)
+        total = r + m
+        step = 1 if total >= 10 else -1 if total <= 4 else 0
+        i = max(0, min(len(ATTITUDES) - 1, i + step))
+        print(f"exchange {n}: 2d6 {r} {m:+d} = {total}: {('moves up' if step > 0 else 'moves down' if step else 'holds')}"
+              f" -> {ATTITUDES[i]}")
+        if i == 0:
+            print("talks break off: the other side walks away or turns to force")
+            return
+        if i >= goal:
+            print(f"goal reached in {n} exchange(s)")
+            return
+    print(f"after {len(mods)} exchange(s): {ATTITUDES[i]}"
+          + ("" if i >= goal else "; more exchanges need a new argument, an offer or leverage, not the same plea"))
+
+
+NAV_DC = {"road": 0, "plains": 10, "forest": 15, "hills": 12, "swamp": 15, "mountain": 15, "desert": 13}
+
+
+def travel_checks(a, whole):
+    """Seeded navigation per day off a known route, and a tracking target number."""
+    import random
+    rng = random.Random(a.seed)
+    if a.navigate is not None:
+        dc = NAV_DC[a.terrain]
+        lost = 0
+        if a.known or not dc:
+            print("navigation: no checks (known route or road)")
+        else:
+            for day in range(1, whole + 1):
+                r = rng.randint(1, 20)
+                ok = r + a.navigate >= dc
+                lost += not ok
+                print(f"day {day}: d20 {r} {a.navigate:+d} vs {dc}: " + ("on course" if ok else "lost: half a day gone"))
+            if lost:
+                print(f"lost {lost} time(s): about {lost * 0.5:g} extra day(s)")
+    if a.track_age is not None:
+        dc = max(NAV_DC[a.terrain], 10) + 2 * a.track_age + (5 if a.rain else 0) - (3 if a.group >= 6 else 0)
+        print(f"tracking: target {dc} ({a.terrain} base, +2 a day old, {'+5 rain, ' if a.rain else ''}"
+              f"{'-3 big group, ' if a.group >= 6 else ''}one check per half day; a failure loses the trail until a new sign)")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1983,6 +2294,10 @@ def main(argv=None):
     s.add_argument("--terrain", default="road", help=", ".join(TERRAIN))
     s.add_argument("--hours", type=float, default=8, help="hours marched per day")
     s.add_argument("--known", action="store_true", help="the route is known (a guide or a map)")
+    s.add_argument("--navigate", type=int, help="navigator's bonus; rolls a getting-lost check per day")
+    s.add_argument("--track-age", type=int, help="days old the trail is; prints the tracking target")
+    s.add_argument("--rain", action="store_true"); s.add_argument("--group", type=int, default=1, help="size of the tracked group")
+    s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_travel)
     s = sub.add_parser("calendar", help="world-day ledger for split groups")
     s.add_argument("file"); s.add_argument("--drift", type=int, default=3, help="warn when groups are this many days apart")
@@ -2005,6 +2320,28 @@ def main(argv=None):
     s.add_argument("file"); s.set_defaults(fn=cmd_trap)
     s = sub.add_parser("downtime", help="check downtime activities: time, cost or sink, outcomes")
     s.add_argument("file"); s.set_defaults(fn=cmd_downtime)
+    s = sub.add_parser("oneshot", help="check a one-shot card: bond, plot, finish, pregens")
+    s.add_argument("card"); s.set_defaults(fn=cmd_oneshot)
+    s = sub.add_parser("tpk", help="what to do after a total party kill, by cause")
+    s.add_argument("--cause", required=True, help="gm-error, bad-luck or player-error")
+    s.add_argument("--keep-pcs", action="store_true", help="the players want their characters back")
+    s.set_defaults(fn=cmd_tpk)
+    s = sub.add_parser("alert", help="dungeon alert track")
+    s.add_argument("action", choices=["init", "raise", "lower", "show"])
+    s.add_argument("--tiers", type=int, default=3); s.add_argument("--why"); s.add_argument("--by", type=int, default=1)
+    s.add_argument("--merge", action="append", help="init: TIER:group+group that join forces at that tier")
+    s.add_argument("--file", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "alert.json"))
+    s.set_defaults(fn=cmd_alert)
+    s = sub.add_parser("backlog", help="check a campaign hook backlog")
+    s.add_argument("file"); s.add_argument("--min", type=int, default=5); s.add_argument("--max", type=int, default=15)
+    s.add_argument("--retell", type=int, default=3, help="warn when a live hook was heard more times than this")
+    s.add_argument("--levelup", action="store_true", help="print a what-changed prompt per open hook")
+    s.set_defaults(fn=cmd_backlog)
+    s = sub.add_parser("negotiate", help="multi-step negotiation, one attitude step per exchange at most")
+    s.add_argument("--start", default="neutral"); s.add_argument("--goal", choices=ATTITUDES, default="helpful")
+    s.add_argument("--exchange", type=int, action="append", help="modifier for one exchange; repeat per exchange")
+    s.add_argument("--rolls", type=int, nargs="*", help="use these 2d6 results in order")
+    s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_negotiate)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
