@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.30.0 (2026-11-26)
+- `fiveroom` `shape: nine`: a nine-node story chart; every node reachable from the first, one end node, dead ends warn, fewer than 3 routes through warn (our floor). Idea inspired by ICRPG 2e Core, p. 82.
+- `encounter --hazard-type T --immune T`: a hazard whose damage type the boss is immune to warns that it only hurts the party. Idea inspired by the Draconomicon, p. 50.
+- `hazard`: counters take `notice_dc` and `identify_dc` (identify not above notice warns), `banish` with no `on_fail` warns, `idle_until` prints when a counter wakes. Idea inspired by the Manual of the Planes, pp. 9-24.
+- `hazard --party N` with counter `start_per_pc` and `cap_per_pc`; `awards` penalty lines want a cancelled_by field. Ideas inspired by CORE 2-2.
+- `npcs`: `notice:` then `open:` DC secret gates (open with no notice warns, a non-number fails); `--agenda` wants 2+ `goals:` and a `tell:`. Ideas inspired by CORE 2-1, pp. 12-15, and Shadow of the Flame.
+- `wander --night-chance N [--night-hours H]` and `--bump N` (after an encounter the next check is likelier). Idea inspired by WK1 and WK2.
+- `adventure`: a scene `check` whose success and fail lead to the same place warns as a fake choice. Idea inspired by Crow's Rest, p. 5.
+- `template --adjust elite|weak --level N [--party-level P]`: the pf2e/sf2e level shift (one level, two at the edge levels; Pathfinder Monster Core, ORC). Idea inspired by Tome of Templates.
+- `battle --strength`: army strength score for two sides of units (hp x attacks x hit chance against the other side's mean AC), even within 1.25x, 2x or more warns. Our own design; Domains at War: Battles has no point-cost rule.
+- Already built before this release: `encounter --spike --pc-hp`, `challenge` `on_fail_time` and `lead_in`, `handouts` purpose, sender and recap.
+- All numbers are ours; no book text or tables copied. 9 new tests (271 total).
+
 ## 0.29.0 (2026-11-26)
 - `tt.py haul LOG --plan GP [--per session|level] [--xp-for-gold] [--magic-shops]`: treasure brought in against a planned rate, warn outside 70% to 130%; removal kinds (theft, tax, upkeep, spend) used more than once warn as a variety check; magic shop entries warn unless allowed; `--xp-for-gold` prints 1 XP per gp. Idea inspired by the AD&D 2nd Edition Dungeon Master's Guide, pp. 104, 181-182.
 - `tpk --reason dramatic|reckless|complacent`: a verdict on whether one PC's death is earned, with advice; `--cause` is now optional when `--reason` is given. Idea inspired by 4th Edition D&D For Dummies (DM part), pp. 139-140.
