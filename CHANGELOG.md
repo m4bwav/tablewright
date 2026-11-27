@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.34.0 (2026-11-26)
+- `battle --caster`: the plan's `caster` {`area_spells`, `per_spell`} against `enemy_size` (or the `count` of the second side's units); an enemy under 3x the caster's area output (`--absorb`) warns and suggests a size. Idea inspired by the Castles & Crusades Castle Keeper's Guide, p. 174.
+- `site --food`: `creatures` [{`name`, `diet` predator|prey|guardian, `count`, `food`, `hoard_origin`}]; more predators than the prey feeds (4 each, `--prey-per`) warns, so does a guardian with no food and no hoard origin. Idea inspired by the Castle Keeper's Guide, pp. 127, 190.
+- `site --purpose defensive|residential|storage|temple`: keyed `areas` [{`name`, `kind`}] are checked for the purpose's kit (our lists). Idea inspired by the Castle Keeper's Guide, p. 130.
+- `site --water`: each of `settlements` and `camps` names `water` {`source`, `flow` trickle|well|spring|stream|river|lake}; a head count over our cap for the flow warns. Idea inspired by Gygax's World Builder, p. 74.
+- `market --availability abundant|common|rare`: a flat 10% down or up before the ceiling check (`--step`). Idea inspired by the Castle Keeper's Guide, p. 152.
+- `npcs --recurring [--pcs Ana,Bo]`: NPCs marked `recurring: yes` want `reacts: Ana=.. | Bo=..` (one per PC), `danger:`, `questions:` and `survival:`; a first name used twice warns. Idea inspired by the Castle Keeper's Guide, p. 64.
+- `settlement --farmland ACRES [--per-acre 0.5]`: a population over farmland times the per-acre figure plus `food_imports` warns. Idea inspired by Gygax's World Builder, p. 72.
+- `realm --government`: `government` {`type`, `gained`, `titles` [{`title`, `rank`}]}; a rank gap fails, the ruler's title should top the ladder. Idea inspired by Gygax's World Builder, pp. 140-141.
+- `realm --grant`: `grants` [{`land`, `owner`, `yield`, `service`, `opt_out`}] print a land reward card; no owner, yield or service fails, no opt-out for players who skip domain play warns. Idea inspired by the Castle Keeper's Guide, pp. 161-163.
+- All numbers are ours and settable; no book text or tables copied. 9 new tests.
+
 ## 0.33.0 (2026-11-26)
 - `mystery --payload`: each clue carries `payload` tags (foe, backstory, work, lead) and a `difficulty` (easy, medium, hard); a clue harder than its payload is worth warns (our weights), so do mostly-hard clue sets and `backstory` facts with no clue; a `fake: true` clue fails without `planted_by` and `why`. Idea inspired by the Tome of Adventure Design, pp. 135, 140-141.
 - `district --visit shopping|mission|exploration`: prints the prep depth for that kind of visit, warns on the missing fields, and wants a `first_visit` capsule (one `image`, one `risk` or `benefit`). Idea inspired by the Tome of Adventure Design, p. 267.
