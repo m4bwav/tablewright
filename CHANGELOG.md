@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.28.0 (2026-11-26)
+- `tt.py vehicle check|hit CARD [--damage N] [--part P | --seed S]`: vehicle damage split over exactly three parts (for example hull, drive, crew or weapons); a hit goes to a named part or a d6 location, and a part at 0 loses its function. Idea inspired by Altered State, p. 35.
+- `tt.py ladder LOGS... [--start N] [--small TEXT] [--big TEXT]`: a 10-step reward ladder; each `ladder:` log line climbs a step, step 10 pays the big reward and wraps to 1. Idea inspired by Altered State, p. 39.
+- `spell forge --draws N --seed S [DECK]`: seeded push-your-luck prompt draw; each draw past the first adds 1 power and 15% mishap risk, a bust exits 1. Idea inspired by ICRPG Magic, p. 26.
+- One shared size-band table (`SIZE_BANDS`: population range, civic kit, fewest inns, venue floors, price ceiling, rare-goods odds, tax multiplier). `settlement` and `venues` now read it with unchanged output. New `tt.py market --band NAME | --population N [--price item=gp]`: shelf ceiling, special order up to twice it, refused past that. Idea inspired by Cities and Towns (Kobold Press), pp. 141-147.
+- `tt.py tax [--lifestyle T] [--period day|week|month|season] [--band B | --population N | --mult X] [--rate R] [--people N]`: upkeep and tax per lifestyle tier per period. Idea inspired by Cities and Towns (Kobold Press), pp. 141-147.
+- `district`: when cards list `neighbours`, a district with none warns, a neighbour with no card warns, and clashing `kind`s side by side (noble next to tannery and a few more) warn.
+- `heat --told-by WHO` (on `crime`) and `heat told FACTION --told-by WHO`: who went to the law shows on `show`; heat at or past `--law-threshold` (default 5, 0 off) with the law never told warns.
+- `tt.py citychange check|draw|advance DECK [--by N] [--seed S]`: a deck of city change clocks; draw one, advance active clocks each session, a full clock fires its event; a clock with no trigger fails. Idea inspired by Cities and Towns (Kobold Press), pp. 168-170.
+- `downtime --preset networking`: a ready networking activity (3 days, a daily cost, d6 outcomes from a rumour to a contact gained and an owed favour). Idea inspired by Cities and Towns (Kobold Press), p. 186.
+- All numbers are ours; no book text or tables copied. 10 new tests (254 total).
+
 ## 0.27.0 (2026-11-26)
 - `item`: a `consumable` that works with no `roll` and names no `made_by` warns; free one-use magic needs a creation sink. Idea inspired by ICRPG Magic, p. 25.
 - `table FILE --band` (CSV `power,severity`): a stronger row whose mishap is milder than a weaker one fails. Idea inspired by ICRPG Magic, p. 22.

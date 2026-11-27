@@ -1619,7 +1619,8 @@ def cmd_venues(a):
     """Venue counts for a settlement against one tavern per 2,000, restaurant per 3,500, inn per 5,000."""
     errs, warns = [], []
     for kind, per, have in (("taverns", 2000, a.taverns), ("restaurants", 3500, a.restaurants), ("inns", 5000, a.inns)):
-        want = max(1 if kind != "restaurants" else 0, round(a.population / per))
+        floor = size_band(population=max(1, a.population))["venue_floor"][kind]
+        want = max(floor, round(a.population / per))
         if have is None:
             print(f"{kind}: about {want}")
             continue
@@ -2177,7 +2178,7 @@ def cmd_heat(a):
     """Faction ledger JSON: standing (-3..3) with reasons, heat that rises with crimes and witnesses."""
     f = Path(a.file)
     led = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
-    if a.action in ("crime", "standing") and not a.faction:
+    if a.action in ("crime", "standing", "told") and not a.faction:
         die(f"heat {a.action} needs a faction")
     if a.action == "standing" and not a.why:
         die("a standing change needs --why")
@@ -2187,8 +2188,16 @@ def cmd_heat(a):
         before = heat_step(e["heat"])
         e["heat"] += 1 + a.witnesses
         e["log"].append(f"crime, {a.witnesses} witnesses: {a.why or 'no note'}")
+        if a.told_by:
+            e.setdefault("law_told", []).append(a.told_by)
         if heat_step(e["heat"]) != before:
             print(f"{a.faction} escalates: {heat_step(e['heat'])}")
+    elif a.action == "told":
+        if not a.told_by:
+            die("heat told needs --told-by (who went to the law)")
+        e = led.setdefault(a.faction, {"standing": 0, "heat": 0, "log": []})
+        e.setdefault("law_told", []).append(a.told_by)
+        e["log"].append(f"law told by {a.told_by}")
     elif a.action == "standing":
         e["standing"] = max(-3, min(3, e["standing"] + a.by))
         e["log"].append(f"standing {a.by:+d}: {a.why}")
@@ -2201,6 +2210,12 @@ def cmd_heat(a):
     for name, e in sorted(led.items(), key=lambda kv: -kv[1]["heat"]):
         last = e["log"][-1] if e["log"] else "-"
         print(f"{name}: standing {e['standing']:+d}, heat {e['heat']} ({heat_step(e['heat'])}); last: {last}")
+        told = e.get("law_told") or []
+        if told:
+            print(f"  law told by: {', '.join(dict.fromkeys(told))}")
+        elif a.law_threshold and e["heat"] >= a.law_threshold:
+            print(f"warn: {name}: heat {e['heat']} at or past {a.law_threshold} and the law was never told; "
+                  "who saw it, and why have they kept quiet?")
 
 
 def cmd_premise(a):
@@ -2693,7 +2708,38 @@ def cmd_district(a):
             warns.append(f"{n}: no gate rule (say 'open' if anyone may pass)")
         print(f"[{n}] watch {x.get('watch', '?')} | bribe {x.get('bribe', '?')} | gate {x.get('gate', '?')} | "
               f"curfew {x.get('curfew', '?')} | owner {x.get('owner', '?')}")
+    if any("neighbours" in x or "neighbors" in x for x in ds):
+        warns += district_neighbours(ds)
     report([], warns, f"{len(ds)} district card(s)")
+
+
+# Our own short list of district kinds that grate when side by side (a prompt, not a law).
+DISTRICT_CLASH = [({"noble", "tannery"}, "the stink drifts uphill"), ({"noble", "slum"}, "guards and grudges at the line"),
+                  ({"temple", "vice"}, "the faithful march on the dens"), ({"market", "graveyard"}, "buyers stay away"),
+                  ({"docks", "noble"}, "dockers and bluebloods brawl"), ({"barracks", "thieves"}, "raids every week")]
+
+
+def district_neighbours(ds):
+    """Warn on a district with no neighbours and on clashing kinds side by side (DISTRICT_CLASH)."""
+    kinds = {x.get("name"): str(x.get("kind", "")).lower() for x in ds}
+    warns, seen = [], set()
+    for x in ds:
+        n = x.get("name") or "?"
+        nb = x.get("neighbours", x.get("neighbors")) or []
+        if not nb:
+            warns.append(f"{n}: no neighbours listed")
+        for m in nb:
+            if m not in kinds:
+                warns.append(f"{n}: neighbour {m!r} has no card")
+                continue
+            pair = frozenset((n, m))
+            if pair in seen:
+                continue
+            seen.add(pair)
+            for clash, why in DISTRICT_CLASH:
+                if {kinds.get(n), kinds[m]} == clash:
+                    warns.append(f"{n} ({kinds.get(n)}) next to {m} ({kinds[m]}): {why}; give a reason or move one")
+    return warns
 
 
 CHASE_COMPLICATIONS = [
@@ -2813,9 +2859,31 @@ def cmd_trap(a):
     report(errs, warns, f"{len(traps)} trap(s) with all four parts and a band")
 
 
+# Ready downtime activities; time, cost and outcome odds are tablewright's own numbers.
+DOWNTIME_PRESETS = {"networking": {
+    "name": "networking", "time": "3 days in town", "cost": "10 gp a day on drinks, gifts and doors",
+    "roll": "d6 + social modifier (+1 per extra 10 gp a day, up to +2)", "repeatable": True,
+    "outcomes": [("1-2", "a rumour, half of it true; nobody remembers you"),
+                 ("3-4", "a rumour worth chasing and one contact gained (name, trade, what they want)"),
+                 ("5-6", "a contact gained who owes you a favour, once"),
+                 ("7+", "a contact gained, an owed favour and a rumour only insiders know")],
+    "hook": "the contact or the rumour points at the next lead",
+}}
+
+
 def cmd_downtime(a):
     """Downtime activities JSON list: time cost and money cost or sink; repeatable ones need an outcome table."""
-    acts = load_list(a.file, "activities")
+    if a.preset:
+        x = DOWNTIME_PRESETS[a.preset]
+        print(f"{x['name']}: {x['time']}, cost {x['cost']}; roll {x['roll']}")
+        for r, o in x["outcomes"]:
+            print(f"  {r}: {o}")
+        print(f"  hook: {x['hook']}")
+        acts = [x]
+    elif not a.file:
+        die("downtime FILE.json or --preset " + "|".join(DOWNTIME_PRESETS))
+    else:
+        acts = load_list(a.file, "activities")
     errs, warns = [], []
     for x in acts:
         n = x.get("name") or "?"
@@ -3109,6 +3177,8 @@ def travel_checks(a, whole):
 # ---- 0.13.0 ----
 
 def cmd_spell(a):
+    if a.action == "forge":
+        return spell_forge(a)
     if a.action == "cost":
         if a.tier not in range(1, 5) or a.power not in range(1, 5):
             die("--tier and --power must be 1 to 4")
@@ -3251,10 +3321,33 @@ def cmd_hack(a):
         print(f"secure system: an attempt (a failure costs something), {diff}")
 
 
-# Our own settlement bands and population ranges (tablewright defaults).
-SETTLE_BANDS = [("thorp", 1, 20), ("hamlet", 21, 100), ("village", 101, 1000), ("small town", 1001, 2500),
-                ("large town", 2501, 6000), ("small city", 6001, 12000), ("large city", 12001, 25000),
-                ("metropolis", 25001, 10 ** 9)]
+# One shared size-band table (tablewright's own numbers, not from any book): population range, the civic
+# kit a place that size should have, the fewest inns, venue floors, the price ceiling in gp for goods found
+# on the shelf, how rare goods turn up, and a tax multiplier for upkeep. settlement, market, venues and tax read it.
+_CIVIC = ("authority", "council", "defence", "hall", "walls")
+_VENUE_FLOOR = {"taverns": 1, "restaurants": 0, "inns": 1}
+SIZE_BANDS = [
+    {"name": "thorp", "lo": 1, "hi": 20, "civic": (), "min_inns": 0, "ceiling": 25, "wealth": "bare", "rare": "never", "tax": 0.5},
+    {"name": "hamlet", "lo": 21, "hi": 100, "civic": _CIVIC[:1], "min_inns": 0, "ceiling": 75, "wealth": "poor", "rare": "never", "tax": 0.6},
+    {"name": "village", "lo": 101, "hi": 1000, "civic": _CIVIC[:4], "min_inns": 0, "ceiling": 250, "wealth": "modest", "rare": "1 in 6", "tax": 0.8},
+    {"name": "small town", "lo": 1001, "hi": 2500, "civic": _CIVIC, "min_inns": 2, "ceiling": 800, "wealth": "steady", "rare": "1 in 4", "tax": 1.0},
+    {"name": "large town", "lo": 2501, "hi": 6000, "civic": _CIVIC, "min_inns": 2, "ceiling": 2000, "wealth": "comfortable", "rare": "1 in 3", "tax": 1.1},
+    {"name": "small city", "lo": 6001, "hi": 12000, "civic": _CIVIC, "min_inns": 2, "ceiling": 6000, "wealth": "prosperous", "rare": "1 in 2", "tax": 1.25},
+    {"name": "large city", "lo": 12001, "hi": 25000, "civic": _CIVIC, "min_inns": 2, "ceiling": 15000, "wealth": "rich", "rare": "2 in 3", "tax": 1.5},
+    {"name": "metropolis", "lo": 25001, "hi": 10 ** 9, "civic": _CIVIC, "min_inns": 2, "ceiling": 50000, "wealth": "opulent", "rare": "5 in 6", "tax": 2.0},
+]
+for _b in SIZE_BANDS:
+    _b["venue_floor"] = _VENUE_FLOOR
+SETTLE_BANDS = [(b["name"], b["lo"], b["hi"]) for b in SIZE_BANDS]
+
+
+def size_band(name=None, population=None):
+    """A band from SIZE_BANDS by name or by population; die on neither or no match."""
+    for b in SIZE_BANDS:
+        if (name is not None and b["name"] == name) or (name is None and population is not None
+                                                          and b["lo"] <= population <= b["hi"]):
+            return b
+    die(f"no size band for {name or population!r}; use " + ", ".join(b["name"] for b in SIZE_BANDS))
 SETTLE_FUNCTIONS = {"trade hub": ("lodging", "stables", "smith"), "port": ("docks", "lodging", "chandler"),
                     "mining": ("smith", "assayer", "provisioner"), "farming": ("mill", "market"),
                     "religious": ("temple", "lodging"), "military": ("barracks", "smith", "armory")}
@@ -3272,13 +3365,10 @@ def cmd_settlement(a):
     if not isinstance(pop, int) or not lo <= pop <= hi:
         errs.append(f"population {pop!r} does not fit {size} ({lo} to {hi})")
     civic = {x.lower() for x in c.get("civic", [])}
-    need = ["authority"] if i >= 1 else []
-    if i >= 2:
-        need += ["council", "defence", "hall"]
-    if i >= 3:
-        need.append("walls")
-        if c.get("inns", 0) < 2:
-            errs.append(f"{size}: {c.get('inns', 0)} inns, a town or bigger wants 2+")
+    band = SIZE_BANDS[i]
+    need = list(band["civic"])
+    if band["min_inns"] and c.get("inns", 0) < band["min_inns"]:
+        errs.append(f"{size}: {c.get('inns', 0)} inns, a town or bigger wants {band['min_inns']}+")
     for k in need:
         if k not in civic:
             errs.append(f"{size}: no {k} in civic")
@@ -6079,6 +6169,221 @@ def trap_reset_errors(traps):
 
 
 
+# ---- 0.28.0: vehicles, reward ladder, spell forge, market bands, tax, city change clocks (numbers ours) ----
+
+VEHICLE_ROLL = "d6: 1-2 first part, 3-4 second, 5-6 third"
+
+
+def vehicle_parts(card):
+    parts = card.get("parts") or {}
+    if len(parts) != 3:
+        die(f"a vehicle wants exactly three parts (e.g. hull, drive, crew), found {len(parts)}")
+    return parts
+
+
+def cmd_vehicle(a):
+    """Vehicle card JSON {name, parts: {part: {hp, max, function}}}: three parts; a part at 0 loses its function."""
+    f = Path(a.card)
+    card = load_json(f)
+    parts = vehicle_parts(card)
+    names = list(parts)
+    errs, warns = [], []
+    if a.action == "hit":
+        if a.damage is None or a.damage < 0:
+            die("vehicle hit needs --damage N (0 or more)")
+        if a.part:
+            if a.part not in parts:
+                die(f"part {a.part!r} not on the card; parts: {', '.join(names)}")
+            name = a.part
+        else:
+            import random
+            r = random.Random(a.seed).randint(1, 6)
+            name = names[(r - 1) // 2]
+            print(f"hit location d6 {r}: {name}")
+        p = parts[name]
+        p["hp"] = max(0, int(p.get("hp", 0)) - a.damage)
+        print(f"{name} takes {a.damage}: {p['hp']}/{p.get('max', '?')}")
+        if p["hp"] == 0:
+            print(f"{name} disabled: no {p.get('function') or name} until repaired")
+        f.write_text(json.dumps(card, indent=2), encoding="utf-8")
+    for name, p in parts.items():
+        hp, mx = p.get("hp"), p.get("max")
+        if not isinstance(mx, int) or mx < 1:
+            errs.append(f"{name}: no max above 0")
+            continue
+        if not isinstance(hp, int) or not 0 <= hp <= mx:
+            errs.append(f"{name}: hp {hp!r} not between 0 and {mx}")
+            continue
+        if not p.get("function"):
+            warns.append(f"{name}: no function (what stops working at 0)")
+        print(f"{name}: {hp}/{mx}" + (f" DISABLED ({p.get('function') or name})" if hp == 0 else ""))
+        if hp == 0:
+            warns.append(f"{name} is at 0: {p.get('function') or name} is out")
+    if all(isinstance(p.get("hp"), int) and p["hp"] == 0 for p in parts.values()):
+        warns.append("every part is at 0: the vehicle is a wreck")
+    report(errs, warns, f"{card.get('name', 'vehicle')}: {len(parts)} parts ({VEHICLE_ROLL})")
+
+
+LADDER_STEPS = 10
+
+
+def cmd_ladder(a):
+    """Reward ladder from logs: each 'ladder: why' line climbs one step; step 10 pays the big reward and wraps to 1."""
+    step, laps, rows = a.start, 0, []
+    if not 0 <= step < LADDER_STEPS:
+        die(f"--start must be 0 to {LADDER_STEPS - 1}")
+    for f in a.logs:
+        for line in Path(f).read_text(encoding="utf-8").splitlines():
+            k, _, v = line.lstrip("-* ").partition(":")
+            if k.strip().lower() != "ladder":
+                continue
+            step += 1
+            pay = a.big if step == LADDER_STEPS else a.small
+            rows.append((Path(f).name, step, v.strip() or "no note", pay))
+            if step == LADDER_STEPS:
+                laps += 1
+                step = 0
+    for name, st, why, pay in rows:
+        print(f"{name}: step {st}/{LADDER_STEPS} {why} -> {pay}" + (" (wraps to 1)" if st == LADDER_STEPS else ""))
+    warns = [] if rows else ["no 'ladder:' lines found"]
+    report([], warns, f"{len(rows)} step(s), {laps} big reward(s) paid, now on step {step} "
+           f"(next is {step + 1}{', the big one' if step + 1 == LADDER_STEPS else ''})")
+
+
+# Our own prompt deck and push-your-luck odds for spell forging.
+FORGE_PROMPTS = ("ember", "tide", "thorn", "echo", "veil", "iron", "gale", "bloom", "shard", "hollow", "spark",
+                 "root", "mirror", "ash", "frost", "chain", "whisper", "storm", "lantern", "bone")
+FORGE_RISK = 15  # mishap chance in percent added by each draw past the first
+
+
+def spell_forge(a):
+    """Draw prompts face down; each extra draw adds 1 power and FORGE_RISK% mishap; stop at --draws or bust."""
+    import random
+    if not 1 <= a.draws <= 6:
+        die("--draws must be 1 to 6")
+    deck = list(FORGE_PROMPTS)
+    if a.file:
+        deck = [l.strip() for l in Path(a.file).read_text(encoding="utf-8").splitlines()
+                if l.strip() and not l.startswith("#")]
+        if len(deck) < a.draws:
+            die(f"deck has {len(deck)} prompts, need {a.draws}")
+    rng = random.Random(a.seed)
+    rng.shuffle(deck)
+    drawn = []
+    for i in range(a.draws):
+        drawn.append(deck[i])
+        risk = FORGE_RISK * i
+        if risk:
+            r = rng.randint(1, 100)
+            if r <= risk:
+                print(f"draw {i + 1}: {deck[i]} (risk {risk}%, d100 {r}): BUST, the spell goes wild; "
+                      f"prompts {', '.join(drawn)} turn on the caster")
+                sys.exit(1)
+            print(f"draw {i + 1}: {deck[i]} (risk {risk}%, d100 {r}): holds, power {i + 1}")
+        else:
+            print(f"draw 1: {deck[i]} (no risk), power 1")
+    nxt = FORGE_RISK * a.draws
+    print(f"ok: forged with power {a.draws} from {', '.join(drawn)}; one more draw would risk {nxt}% "
+          "(tablewright's own odds)")
+
+
+def cmd_market(a):
+    """What a settlement's market stocks, by size band: price ceiling, rare goods odds; check prices against it."""
+    b = size_band(name=a.band) if a.band else size_band(population=a.population) if a.population else None
+    if b is None:
+        die("market needs --band NAME or --population N")
+    print(f"{b['name']} ({b['lo']} to {b['hi'] if b['hi'] < 10 ** 9 else 'more'}): {b['wealth']} market, "
+          f"shelf goods up to {b['ceiling']} gp, rare goods {b['rare']} (tablewright's own numbers)")
+    errs, warns = [], []
+    for it in a.price or []:
+        name, _, cost = it.rpartition("=")
+        try:
+            cost = float(cost)
+        except ValueError:
+            die(f"--price wants item=gp, got {it!r}")
+        name = name or "item"
+        if cost <= b["ceiling"]:
+            print(f"{name} {cost:g} gp: on the shelf")
+        elif cost <= 2 * b["ceiling"]:
+            warns.append(f"{name} {cost:g} gp: above the {b['ceiling']} gp ceiling; special order, a week and a roll")
+        else:
+            errs.append(f"{name} {cost:g} gp: over twice the ceiling; not sold in a {b['name']}, go to a bigger place")
+    report(errs, warns, f"{b['name']} market")
+
+
+# Our own base upkeep in gp per day per person by lifestyle, scaled by the band's tax multiplier.
+LIFESTYLE_UPKEEP = {"wretched": 0, "squalid": 0.1, "poor": 0.2, "modest": 1, "comfortable": 2, "wealthy": 4,
+                    "aristocratic": 10}
+TAX_SHARE = {"wretched": 0, "squalid": 0.05, "poor": 0.05, "modest": 0.1, "comfortable": 0.1, "wealthy": 0.15,
+             "aristocratic": 0.2}
+PERIOD_DAYS = {"day": 1, "week": 7, "month": 30, "season": 90}
+
+
+def cmd_tax(a):
+    """Upkeep and tax per lifestyle tier per period, scaled by the size band (or --mult)."""
+    if a.mult is not None:
+        mult, where = a.mult, f"x{a.mult:g}"
+    elif a.band or a.population:
+        b = size_band(name=a.band) if a.band else size_band(population=a.population)
+        mult, where = b["tax"], f"{b['name']} x{b['tax']:g}"
+    else:
+        mult, where = 1.0, "x1"
+    if a.people < 1:
+        die("--people must be at least 1")
+    days = PERIOD_DAYS[a.period]
+    tiers = [a.lifestyle] if a.lifestyle else list(LIFESTYLE_UPKEEP)
+    for t in tiers:
+        up = LIFESTYLE_UPKEEP[t] * mult * days * a.people
+        tax = up * (a.rate if a.rate is not None else TAX_SHARE[t])
+        print(f"{t}: upkeep {up:.2f} gp, tax {tax:.2f} gp, total {up + tax:.2f} gp per {a.period}"
+              f" for {a.people} ({where}; tablewright's own numbers)")
+
+
+def cmd_citychange(a):
+    """City change deck JSON list of clocks {name, trigger, segments, filled, active, event}: check, draw, advance."""
+    f = Path(a.deck)
+    d = load_json(f)
+    cards = d.get("cards", []) if isinstance(d, dict) else d
+    if not cards:
+        die("no cards")
+    errs, warns = [], []
+    for c in cards:
+        n = c.get("name", "?")
+        if not c.get("trigger"):
+            errs.append(f"{n}: a clock with no trigger (what starts it ticking)")
+        if not isinstance(c.get("segments"), int) or c["segments"] < 2:
+            errs.append(f"{n}: segments {c.get('segments')!r}, want 2 or more")
+        if not c.get("event"):
+            warns.append(f"{n}: no event (what changes in the city when it fills)")
+    if a.action != "check" and errs:
+        report(errs, warns, "")
+    changed = False
+    if a.action == "draw":
+        pool = [c for c in cards if not c.get("active") and not c.get("done")]
+        if not pool:
+            die("every card is drawn")
+        import random
+        c = random.Random(a.seed).choice(pool)
+        c["active"], c["filled"] = True, c.get("filled", 0)
+        print(f"drawn: {c['name']} (trigger: {c['trigger']}), 0/{c['segments']}")
+        changed = True
+    elif a.action == "advance":
+        for c in cards:
+            if not c.get("active"):
+                continue
+            c["filled"] = min(c["segments"], c.get("filled", 0) + a.by)
+            if c["filled"] >= c["segments"]:
+                c["active"], c["done"] = False, True
+                print(f"FILLED: {c['name']}: {c.get('event') or 'the city changes'}")
+            changed = True
+    if changed:
+        f.write_text(json.dumps(d, indent=2), encoding="utf-8")
+    for c in cards:
+        state = "done" if c.get("done") else "active" if c.get("active") else "in the deck"
+        print(f"{c.get('name', '?')}: {c.get('filled', 0)}/{c.get('segments', '?')} {state}")
+    report(errs, warns, f"{len(cards)} city change clock(s), {sum(bool(c.get('active')) for c in cards)} active")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -6218,7 +6523,9 @@ def main(argv=None):
     s.add_argument("--approach", choices=["friendly", "neutral", "hostile"], default="neutral")
     s.add_argument("--roll", type=int); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_reaction)
     s = sub.add_parser("heat", help="faction standing and heat ledger")
-    s.add_argument("action", choices=["show", "crime", "standing", "cool"]); s.add_argument("faction", nargs="?")
+    s.add_argument("action", choices=["show", "crime", "standing", "cool", "told"]); s.add_argument("faction", nargs="?")
+    s.add_argument("--told-by", help="who told the law (with crime or told)")
+    s.add_argument("--law-threshold", type=int, default=5, help="warn when heat reaches this and the law was never told (0 off)")
     s.add_argument("--file", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "heat.json"))
     s.add_argument("--witnesses", type=int, default=0); s.add_argument("--by", type=int, default=1); s.add_argument("--why")
     s.set_defaults(fn=cmd_heat)
@@ -6325,7 +6632,8 @@ def main(argv=None):
     s.add_argument("--reset", action="store_true", help="a trap with guards: PUZZLE needs reset and retry")
     s.set_defaults(fn=cmd_trap)
     s = sub.add_parser("downtime", help="check downtime activities: time, cost or sink, outcomes")
-    s.add_argument("file"); s.set_defaults(fn=cmd_downtime)
+    s.add_argument("file", nargs="?"); s.add_argument("--preset", choices=sorted(DOWNTIME_PRESETS))
+    s.set_defaults(fn=cmd_downtime)
     s = sub.add_parser("oneshot", help="check a one-shot card: bond, plot, finish, pregens")
     s.add_argument("card"); s.set_defaults(fn=cmd_oneshot)
     s = sub.add_parser("tpk", help="what to do after a total party kill, by cause")
@@ -6355,7 +6663,9 @@ def main(argv=None):
     s.add_argument("--rolls", type=int, nargs="*", help="use these 2d6 results in order")
     s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_negotiate)
     s = sub.add_parser("spell", help="spell cost, or check homebrew spells")
-    s.add_argument("action", choices=["cost", "check"]); s.add_argument("file", nargs="?")
+    s.add_argument("action", choices=["cost", "check", "forge"]); s.add_argument("file", nargs="?")
+    s.add_argument("--draws", type=int, default=1, help="forge: prompts to draw (each past the first adds risk)")
+    s.add_argument("--seed", type=int)
     s.add_argument("--tier", type=int); s.add_argument("--power", type=int); s.add_argument("--mastered", action="store_true")
     s.set_defaults(fn=cmd_spell)
     s = sub.add_parser("rewards", help="check a reward ladder: cadence lengthens, 3+ triggers, gates")
@@ -6567,6 +6877,29 @@ def main(argv=None):
     s.add_argument("party"); s.add_argument("logs", nargs="+")
     s.add_argument("--stale", type=int, default=3, help="warn on a bond unused this many sessions")
     s.set_defaults(fn=cmd_ties)
+    s = sub.add_parser("vehicle", help="vehicle damage over three parts; a part at 0 loses its function")
+    s.add_argument("action", choices=["check", "hit"]); s.add_argument("card")
+    s.add_argument("--damage", type=int); s.add_argument("--part"); s.add_argument("--seed", type=int)
+    s.set_defaults(fn=cmd_vehicle)
+    s = sub.add_parser("ladder", help="10-step reward ladder from 'ladder:' log lines; step 10 pays big and wraps")
+    s.add_argument("logs", nargs="+"); s.add_argument("--start", type=int, default=0)
+    s.add_argument("--small", default="small reward"); s.add_argument("--big", default="big reward")
+    s.set_defaults(fn=cmd_ladder)
+    s = sub.add_parser("market", help="market stock and price ceiling by settlement size band (our numbers)")
+    s.add_argument("--band", choices=[b["name"] for b in SIZE_BANDS]); s.add_argument("--population", type=int)
+    s.add_argument("--price", action="append", help="item=gp to check against the ceiling")
+    s.set_defaults(fn=cmd_market)
+    s = sub.add_parser("tax", help="upkeep and tax per lifestyle tier per period (our numbers)")
+    s.add_argument("--lifestyle", choices=list(LIFESTYLE_UPKEEP))
+    s.add_argument("--period", choices=list(PERIOD_DAYS), default="month")
+    s.add_argument("--band", choices=[b["name"] for b in SIZE_BANDS]); s.add_argument("--population", type=int)
+    s.add_argument("--mult", type=float, help="price multiplier instead of the band's")
+    s.add_argument("--rate", type=float, help="tax as a share of upkeep instead of the tier's")
+    s.add_argument("--people", type=int, default=1); s.set_defaults(fn=cmd_tax)
+    s = sub.add_parser("citychange", help="city change clock deck: check, draw, advance per session")
+    s.add_argument("action", choices=["check", "draw", "advance"]); s.add_argument("deck")
+    s.add_argument("--by", type=int, default=1); s.add_argument("--seed", type=int)
+    s.set_defaults(fn=cmd_citychange)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
