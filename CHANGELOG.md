@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.33.0 (2026-11-26)
+- `mystery --payload`: each clue carries `payload` tags (foe, backstory, work, lead) and a `difficulty` (easy, medium, hard); a clue harder than its payload is worth warns (our weights), so do mostly-hard clue sets and `backstory` facts with no clue; a `fake: true` clue fails without `planted_by` and `why`. Idea inspired by the Tome of Adventure Design, pp. 135, 140-141.
+- `district --visit shopping|mission|exploration`: prints the prep depth for that kind of visit, warns on the missing fields, and wants a `first_visit` capsule (one `image`, one `risk` or `benefit`). Idea inspired by the Tome of Adventure Design, p. 267.
+- `trap` fields: `kind: magical` countered only by thievery warns; `confirm_dc` under `detect_dc` warns, a `tell` DC must sit under `detect_dc`; `built: true` wants `bypass` (or "none"); a typed, built or DC-rated trap with no `disarm_fail` warns; `save_every_turn` with no `immunity` warns. Idea inspired by 20 New Traps, pp. 1-8.
+- `trap --complex`: a `complex` round clock (`start`, `per_round`, `harm_at`, `delay_action`, `end`) prints the round harm starts with the hazard counter math; `lockdown: true` fails without a `door` (`ac`, `hp`, `pick_dc`) and an `exit`. Idea inspired by 20 New Traps, pp. 2-3, 6-8.
+- `oneshot --newbies`: a first-session card; each of its `scenarios` wants `teaches`, `soft_fail`, `retry_easier_by`, `debrief` and `ally_gain`; `instant_death` at level 1 with no `backups` warns; a pregen role no scenario puts in the `spotlight` warns. Folded into `oneshot` rather than a new command. Idea inspired by the GM Games Starter Adventures, pp. 4, 20, 38.
+- `awards`: `process: player | camp|investigation|roleplay|ambush | xp` lines (one ambush line per spotter) are totalled per log; `end: killed|fled-without|fled-with | xp` records a graded end state, any other state fails. Idea inspired by The Wizard's Amulet, p. 14.
+- `wander --table`: entries may carry `from` (a hex) and need a `purpose` with it; a `meets: [A, B]` entry must name two entries on the table; a `soft` entry needs a `complication` % from 1 to 100. Idea inspired by Points of Light, pp. 5, 29.
+- `rooms`: per-room `alarm` stance (fight, flee, warn, hide, parley) and `lookout` rounds (a whole number; warn with no lookout warns), idea inspired by the Book of Lairs, pp. 8, 65. `rooms` and `site` take a `prior_party` {`fate`, `left`}, and `tavern` `staff` each want `role`, `secret` and a `tie` to another NPC on the card; ideas inspired by the GM Games Starter Adventures, pp. 26-29, 38.
+- All numbers are ours; no book text or tables copied. 11 new tests.
+
 ## 0.32.0 (2026-11-26)
 - `site` lair card: with `lair: true` or an `owner`, wants `level`, `party_size`, a non-fight resolution (parley, bribe, recruit, capture...) and `after` (who holds the site next). `site --snitch`: a resident who is not hostile needs `if_left`. Ideas inspired by the Book of Lairs, pp. 4-8.
 - `site` factions: `truce_with` must name a faction here and carry a `price`; a faction with no `after` move warns. Idea inspired by Bandits' Nest, pp. 4, 15.
