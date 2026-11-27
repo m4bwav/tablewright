@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.38.0 (2026-11-27)
+- `adventure --day [--cap 12]`: fight load per day between long rests (easy 1 to deadly 4), warns over the cap, under a third of it, and on three hard or deadly fights in a row. Idea inspired by the D&D 5e prerelease DM Guidelines.
+- `explore FILE --tasks`: a new command; per-turn task roster (watch, map, navigate, sneak, forage); fast pace allows none, two tasks give disadvantage, sneaking needs slow, no watch misses hidden things, mapping cuts the lost DC. Idea inspired by the D&D 5e prerelease DM Guidelines.
+- `stash`: a new command; seeded hiding place for a keeper's valuables (room, spot, object part, container), a chance of a ward and a 1 in N special find. Our own word lists. Idea inspired by the JG Guidebook to Shops.
+- `shop FILE --check`: a new command; quarter, keepers with roles, a customer range, a price line (minimum order, lead time, trade-ins, buy-back), one quirk and one hook. Idea inspired by the JG Guidebook to Shops.
+- `check --haste/--caution --dc N --bonus B [--time M]`: half the time at a higher DC or double the time at a lower one, with d20 odds against the normal try. Idea inspired by the MegaTraveller Referee's Manual.
+- `clues FILE --tiers`: a new command; each clue is known, cheap, costly (needs a cost) or never; a core fact needs a known or cheap clue. Idea inspired by the MegaTraveller Referee's Manual.
+- `negotiate --bribe X --wealth W [--honest]`: the asked-for `social --bribe`, merged into `negotiate`; the offer as a share of a month's take: an insult steps down, larger shares add to the first exchange, too much raises suspicion. The asked-for `social --ladder` is the existing `negotiate`. Idea inspired by the MegaTraveller Referee's Manual.
+- `repair --stack minor,major,destroyed`: a new command; a diagnosis roll first (a miss makes the first repair harder), worst damage first, destroyed parts need replacing. Idea inspired by the MegaTraveller Referee's Manual and the Traveller 2300 Referee's Manual.
+- `trade --week N [--upkeep U]`: a 2d6 market swing each week held, net of upkeep, and the best week to sell. `--price`/`--hexes` are now checked in code so `--week` can run alone. Idea inspired by the MegaTraveller Referee's Manual.
+- `hire --rate LEVEL [--danger] [--days N]`: a new command; day, week and long-hire month wages by skill level. Idea inspired by the MegaTraveller Referee's Manual.
+- `rooms --force DOOR [--pick]`: forcing (or picking) a door from its `force`/`lock` block, minutes per try and a wandering roll each try, more likely when loud. Idea inspired by If Looks Could Kill and Out for Blood.
+- `rooms --eras present,past,future`: per-era room contents in visit order; loot taken in one era is gone in later ones; each visited era needs a portal arrival room. Idea inspired by Time & Time Again.
+- `site --edge` and `site --ward`: a fall-safety item before the first lethal edge; a warded area needs a non-magical route in. Idea inspired by Silver Linings.
+- `act FILE --quests`: a new command; each gate quest's `min_level` must be reachable from the other quests' XP (pf2e 1000 a level, or the 5e SRD thresholds). Idea inspired by Holdenshire Act 1.
+- `carry --resources --hp-lost P --slots-spent N --xp X`: a fled group keeps its lost HP and spent slots into the rematch; XP scales with what is left. Idea inspired by An Axe to Grind.
+- `pcs FILE [--drift]`: a new command; a per-PC file (secrets, plot devices, owed tasks, write-out) and level drift from the party median at 2 and 4. Idea inspired by the Campaign Creation Guide.
+- `world --magic`: a `## Magic` block with abundance, cost per use, a controller for finite magic and 1 to 3 feel levers. Idea inspired by the Kobold Guide to Magic.
+- All numbers are ours and settable; no book text or tables copied. 17 new tests.
+
 ## 0.37.0 (2026-11-27)
 - `threads --spotlight`: every PC owns a thread, no PC over 40% of threads, conflict threads name what they oppose. Idea inspired by Beyond Role and Play.
 - `party --check-stakes`: each PC has a goal, a stake, an exit blocker and 2+ threads. Idea inspired by Beyond Role and Play.
