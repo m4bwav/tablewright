@@ -1323,6 +1323,10 @@ ENDINGS = ("countdown", "hook", "choice", "ran-long")
 
 def cmd_sessionlog(a):
     """A session log in prep-card markdown; its ## Threads feed 'tt.py threads'."""
+    if a.sheet:
+        return sessionlog_sheet(a)
+    if a.roster:
+        return sessionlog_roster(a)
     print(SESSION_LOG.format(n=a.session), end="")
 
 
@@ -2368,6 +2372,8 @@ def cmd_reaction(a):
     rng = random.Random(a.seed)
     roll = a.roll if a.roll is not None else rng.randint(1, 6) + rng.randint(1, 6)
     mods = sum(a.mod or []) + {"friendly": 1, "neutral": 0, "hostile": -2}[a.approach]
+    if a.rank_gap is not None:
+        mods += reaction_rank(a.rank_gap)
     total = roll + mods
     print(f"roll {roll} {mods:+d} = {total}: {reaction_band(total)}")
     print("use it for NPCs made on the spot; a written NPC reacts as written")
@@ -3423,6 +3429,14 @@ def cmd_negotiate(a):
     mods = list(a.exchange or [])
     rolls = a.rolls or []
     print(f"start: {a.start}; goal: {a.goal}")
+    if a.ask:
+        price = bribe_price(a)
+        if a.bribe is None:
+            return
+        if a.bribe >= price:
+            print(f"bribe {a.bribe:g} meets the price: they take it; goal reached")
+            return
+        print(f"bribe {a.bribe:g} is under the price {price:.0f}")
     if a.bribe is not None:
         m = bribe_mod(a)
         if m is None:
@@ -5210,6 +5224,8 @@ def band_pct(step):
 
 def cmd_trade(a):
     """Price of a regional haul: one compounding step per --step road hexes."""
+    if a.route:
+        return trade_route(a)
     if a.week:
         return trade_week(a)
     if a.price is None or a.hexes is None:
@@ -5610,6 +5626,12 @@ def cmd_realm(a):
     """Kingdom or region card: ruler, relations with deterrent and posture, entry, an uncontrolled place, hooks, a custom."""
     d = json.loads(Path(a.file).read_text(encoding="utf-8"))
     errs, warns = [], []
+    if a.turn or a.food:
+        if a.turn:
+            realm_turn(d)
+        if a.food:
+            realm_food(d, a)
+        return
     if a.changing_times:
         realm_changing_times(d, errs, warns)
         return report(errs, warns, "realm changing times")
@@ -6926,6 +6948,8 @@ PERIOD_DAYS = {"day": 1, "week": 7, "month": 30, "season": 90}
 
 def cmd_tax(a):
     """Upkeep and tax per lifestyle tier per period, scaled by the size band (or --mult)."""
+    if a.collect is not None:
+        return tax_collect(a)
     if a.mult is not None:
         mult, where = a.mult, f"x{a.mult:g}"
     elif a.band or a.population:
@@ -7422,6 +7446,7 @@ def cmd_sandbox(a):
     for want in ("true", "false", "half") if rum else ():
         if want not in kinds:
             warns.append(f"rumor chart has no {want} entry")
+    sandbox_kit(d, warns)
     report(errs, warns, f"sandbox {(d.get('overview') or {}).get('name', '?')}: {len(keys)} keyed hexes, "
                         f"{len(enc)} encounters, {len(rum)} rumors")
 
@@ -9749,6 +9774,419 @@ def district_bits(d, ds):
     return warns
 
 
+# ---- 0.41.0: trial, blaze, haggle, bribe price, populate, invest, realm turn and food, tax collect, trade route,
+# plague, session-log roster and sheet, reaction rank gap, sandbox start kit. All numbers and words ours. ----
+
+TRIAL_CRIME = {"minor": (1, 10, "the fine only"), "serious": (3, 50, "the fine and a week in the stocks or the lash"),
+               "grave": (7, 200, "the fine and prison for d6 years, or exile")}  # days held per d6, fine base; ours
+TRIAL_EVIDENCE = {"none": 0, "weak": 2, "strong": 4}
+TRIAL_RANKS = ("bonded", "poor", "commoner", "guild", "merchant", "noble")
+
+
+def cmd_trial(a):
+    """Opposed court roll: defence and prosecution 2d6 plus advocate, witnesses, evidence and rank gap."""
+    import random
+    rng = random.Random(a.seed)
+    per, base, sentence = TRIAL_CRIME[a.crime]
+    held = rng.randint(1, 6) * per
+    if a.rank_gap >= 2:
+        held = held // 2
+    print(f"held before trial: {held} day(s)" + (" (halved: the accused outranks the accuser)" if a.rank_gap >= 2 else ""))
+    d1, d2 = rng.randint(1, 6) + rng.randint(1, 6), rng.randint(1, 6) + rng.randint(1, 6)
+    dfn = d1 + a.advocate + a.witnesses + max(a.rank_gap, 0)
+    pro = d2 + a.prosecutor + a.against + TRIAL_EVIDENCE[a.evidence] + max(-a.rank_gap, 0)
+    print(f"defence 2d6 {d1} +{a.advocate} advocate +{a.witnesses} witnesses +{max(a.rank_gap, 0)} rank = {dfn}")
+    print(f"prosecution 2d6 {d2} +{a.prosecutor} advocate +{a.against} witnesses +{TRIAL_EVIDENCE[a.evidence]} "
+          f"evidence +{max(-a.rank_gap, 0)} rank = {pro}")
+    if dfn > pro or (dfn == pro and a.rank_gap > 0):
+        print("verdict: acquitted" + (" (tie goes to the higher rank)" if dfn == pro else ""))
+        return
+    fine = base * (a.rank + 1)
+    print(f"verdict: guilty ({a.crime}); fine {fine:g} ({base} x rank {a.rank} {TRIAL_RANKS[a.rank]} + 1); "
+          "a month to pay")
+    print(f"sentence: {sentence}")
+    if a.purse is not None and a.purse < fine:
+        owed = fine - a.purse
+        months = math.ceil(owed / a.wage)
+        print(f"unpaid after a month: {owed:g} owed; debt servitude for {months} month(s) at {a.wage:g} a month")
+
+
+def blaze_graph(d):
+    b = d.get("buildings", d)
+    g = {}
+    for n, v in b.items():
+        near = v if isinstance(v, list) else (v or {}).get("near", [])
+        oil = False if isinstance(v, list) else bool((v or {}).get("oil"))
+        g.setdefault(n, {"near": set(), "oil": False})
+        g[n]["near"] |= set(near)
+        g[n]["oil"] = g[n]["oil"] or oil
+        for m in near:
+            g.setdefault(m, {"near": set(), "oil": False})["near"].add(n)
+    return g
+
+
+BLAZE_BURN = 3  # hours a building burns before it is gutted; ours
+
+
+def cmd_blaze(a):
+    """Fire over a building adjacency list: each hour a burning building may catch each neighbour on a d6."""
+    import random
+    rng = random.Random(a.seed)
+    g = blaze_graph(load_json(a.file))
+    if a.start not in g:
+        die(f"--start {a.start!r} is not a building in the file")
+    burning, gutted = {a.start: 0}, []
+    cut = a.brigade // 2
+    print(f"fire starts in {a.start}; bucket brigade of {a.brigade} crew(s): -{cut} to each spread target")
+    for h in range(1, a.hours + 1):
+        caught = []
+        for b in sorted(burning):
+            for n in sorted(g[b]["near"]):
+                if n in burning or n in gutted or n in caught:
+                    continue
+                t = max(0, 2 + (2 if g[n]["oil"] else 0) - cut)
+                if rng.randint(1, 6) <= t:
+                    caught.append(n)
+        for b in list(burning):
+            burning[b] += 1
+            if burning[b] >= BLAZE_BURN:
+                gutted.append(b)
+                del burning[b]
+        for n in caught:
+            burning[n] = 0
+        print(f"hour {h}: caught {', '.join(caught) or 'none'}; burning {', '.join(sorted(burning)) or 'none'}; "
+              f"gutted {len(gutted)}")
+        if not burning:
+            print("the fire is out")
+            break
+    print(f"lost: {', '.join(gutted) or 'none'}" + (f"; still burning: {', '.join(sorted(burning))}" if burning else ""))
+
+
+HAGGLE_FLOOR = {1: 70, 2: 75, 3: 80, 4: 85, 5: 90, 6: 95}  # vendor floor as % of base on a d6; ours
+HAGGLE_MOD = {"foreign": 10, "wealthy": 15, "vital": 20, "unaware": 10}  # points added to the floor; ours
+
+
+def cmd_haggle(a):
+    """Hidden vendor price floor; shopping a district is one best-of roll over the stalls."""
+    import random
+    rng = random.Random(a.seed)
+    if a.base <= 0 or a.stalls < 1:
+        die("--base above 0 and --stalls 1 or more")
+    add = sum(v for k, v in HAGGLE_MOD.items() if getattr(a, k))
+    rolls = [rng.randint(1, 6) for _ in range(a.stalls)]
+    r = min(rolls)
+    pct = HAGGLE_FLOOR[r] + add
+    floor = a.base * pct / 100
+    tags = ", ".join(f"{k} +{v}" for k, v in HAGGLE_MOD.items() if getattr(a, k)) or "no modifiers"
+    if a.stalls > 1:
+        print(f"shopping {a.stalls} stalls: d6 {', '.join(map(str, rolls))}, best {r}")
+    print(f"floor (GM only): {floor:.0f} ({HAGGLE_FLOOR[r]}% of {a.base:g}, {tags})")
+    print(f"opening ask: {max(floor, a.base) * 1.3:.0f}")
+    if a.offer is not None:
+        print(f"offer {a.offer:g}: " + ("deal" if a.offer >= floor else "refused; one more try, then the vendor stops"))
+
+
+BRIBE_PRICE = 0.25  # base price as a share of a month's take, per danger, exposure and urgency point; ours
+
+
+def bribe_price(a):
+    """--ask: what the NPC wants for the risk, and an auction when a rival bids."""
+    import random
+    rng = random.Random(a.seed)
+    if a.wealth is None or a.wealth <= 0:
+        die("--ask needs --wealth W (their usual monthly take)")
+    for k in ("danger", "exposure", "urgency"):
+        if not 0 <= getattr(a, k) <= 3:
+            die(f"--{k} is 0 to 3")
+    price = a.wealth * BRIBE_PRICE * (1 + a.danger + a.exposure) * (1 + a.urgency / 2)
+    print(f"asking price: {price:.0f} (danger {a.danger}, social exposure {a.exposure}, urgency {a.urgency})")
+    if a.rival:
+        bid = max(price, a.rival)
+        rounds = 0
+        while rounds < 3 and rng.randint(1, 6) >= 3:
+            rounds += 1
+            bid *= 1.1
+            print(f"auction round {rounds}: the rival raises; to win, beat {bid:.0f}")
+        price = bid * 1.1
+        print(f"auction: the rival stops; {price:.0f} wins it")
+    return price
+
+
+POPULATE_LAIRS = {1: 0, 2: 0, 3: 1, 4: 1, 5: 2, 6: 3}  # lairs per hex on a d6; ours
+POPULATE_KINDS = (("goblins", "orcs"), ("orcs", "goblins"), ("bandits", "outlaws"), ("outlaws", "bandits"),
+                  ("wolves", None), ("ghouls", None), ("lizardfolk", None), ("hobgoblins", "orcs"))  # kind, ally
+
+
+def populate_rivals(k1, k2):
+    a1 = dict(POPULATE_KINDS).get(k1)
+    return k1 != k2 and a1 != k2 and dict(POPULATE_KINDS).get(k2) != k1
+
+
+def cmd_populate(a):
+    """Lairs per hex, home share, splinters, clashes as pre-play history; --migrate for a season's movement."""
+    import random
+    rng = random.Random(a.seed)
+    if a.hexes < 1:
+        die("--hexes 1 or more")
+    if a.migrate:
+        return populate_migrate(a, rng)
+    lairs = []
+    for h in range(1, a.hexes + 1):
+        for _ in range(POPULATE_LAIRS[rng.randint(1, 6)]):
+            kind = rng.choice(POPULATE_KINDS)[0]
+            n = rng.randint(2, 12) * 5 if kind in ("orcs", "goblins", "hobgoblins", "bandits") else rng.randint(3, 12)
+            split = rng.randint(1, 6) == 1 and any(k == kind for _, k, _, _ in lairs)
+            lairs.append((h, kind, n, split))
+    for h, kind, n, split in lairs:
+        print(f"hex {h}: {kind} {n}, {n // 2} at home" + (" (a splinter of a bigger group)" if split else ""))
+    print(f"{len(lairs)} lairs in {a.hexes} hexes")
+    clashes = 0
+    for i, (h1, k1, n1, _) in enumerate(lairs):
+        for h2, k2, n2, _ in lairs[i + 1:]:
+            if abs(h1 - h2) <= 1 and populate_rivals(k1, k2) and clashes < 3:
+                clashes += 1
+                w = (h1, k1) if n1 + rng.randint(1, 6) >= n2 + rng.randint(1, 6) else (h2, k2)
+                print(f"history: {k1} (hex {h1}) and {k2} (hex {h2}) fought; the {w[1]} of hex {w[0]} hold the field")
+    print("each year: groups recover a sixth of their losses and grow a tenth if no rival is next door")
+
+
+POPULATE_SEASON = {"spring": 2, "summer": 1, "autumn": 1, "winter": 3}  # newcomer groups per season; ours
+
+
+def populate_migrate(a, rng):
+    if not a.season:
+        die("--migrate needs --season")
+    cleared = [int(x) for x in (a.cleared or "").split(",") if x.strip()]
+    for i in range(POPULATE_SEASON[a.season]):
+        kind = rng.choice(POPULATE_KINDS)[0]
+        print(f"newcomers: {kind} arrive at the outer edge, hex side {rng.randint(1, 6)} of hex {a.hexes}")
+    for c in cleared:
+        if rng.randint(1, 6) >= 4:
+            print(f"hex {c} (cleared): a neighbouring group drifts in from hex {max(1, c - 1)}")
+        else:
+            print(f"hex {c} (cleared): stays empty this season")
+    print("where two groups want one hex, roll a clash: higher number plus d6 holds it")
+
+
+INVEST = {  # man-days per 100 gp, yearly upkeep share, yearly yield share; ours
+    "road": (40, 0.05, 0.06), "bridge": (30, 0.03, 0.10), "canal": (60, 0.08, 0.12),
+    "inn": (20, 0.10, 0.15), "farm": (25, 0.05, 0.08), "tourism": (10, 0.02, 0.05)}
+INVEST_DECAY = 0.2  # value lost a year with upkeep unpaid; ours
+INVEST_SETTLERS = 500  # gp per settler group to escort; ours
+
+
+def cmd_invest(a):
+    """Building in the realm: labour, yearly upkeep or decay, yield; farms bring settlers, tourism compounds."""
+    if a.gp <= 0 or a.years < 1:
+        die("--gp above 0 and --years 1 or more")
+    md, up, y = INVEST[a.kind]
+    print(f"{a.kind} for {a.gp:g} gp: {a.gp / 100 * md:.0f} man-days of work; upkeep {a.gp * up:.0f} a year")
+    if a.kind == "farm":
+        print(f"settlers: {int(a.gp // INVEST_SETTLERS)} group(s) to escort in (escort jobs)")
+    value, total = float(a.gp), 0.0
+    rate = y
+    for yr in range(1, a.years + 1):
+        if a.no_upkeep:
+            value *= 1 - INVEST_DECAY
+        got = value * rate
+        total += got
+        print(f"year {yr}: yield {got:.0f}" + (f", value decays to {value:.0f}" if a.no_upkeep else ""))
+        if a.kind == "tourism":
+            rate *= 1.25
+    print(f"total yield over {a.years} year(s): {total:.0f}")
+
+
+REGIME_DEFICIT = 5  # Control lost per point of class goodwill below 0; ours
+REGIME_UPROAR = -3  # a class at or below this starts an uproar; ours
+REGIME_FALL = 30
+
+
+def realm_turn(d):
+    r = d.get("regime") or die("--turn needs a regime block {control, corruption, classes {name: goodwill}}")
+    c, cor = float(r.get("control", 60)), float(r.get("corruption", 0))
+    for name, gw in (r.get("classes") or {}).items():
+        if gw < 0:
+            c -= REGIME_DEFICIT * -gw
+            print(f"{name}: goodwill {gw}, Control -{REGIME_DEFICIT * -gw}")
+        if gw <= REGIME_UPROAR:
+            c -= 10
+            print(f"{name}: uproar (riots, a petition, a march), Control -10")
+    if cor > 25:
+        lost = (cor - 25) // 5
+        c -= lost
+        print(f"corruption {cor:g}%: Control -{lost:g}; a bribe works on d100 under {cor:g}")
+    print(f"Control {r.get('control', 60)}% -> {c:g}%")
+    if c < REGIME_FALL:
+        print(f"below {REGIME_FALL}%: the regime falls (coup, revolt or abdication)")
+
+
+FOOD_HARVEST = {2: 0.5, 3: 0.5, 4: 0.75, 5: 1.0, 6: 1.0, 7: 1.0, 8: 1.0, 9: 1.0, 10: 1.1, 11: 1.25, 12: 1.25}  # ours
+
+
+def realm_food(d, a):
+    import random
+    rng = random.Random(a.seed)
+    f = d.get("food") or die("--food needs a food block {population, stock, harvest}")
+    pop, stock, crop = float(f["population"]), float(f.get("stock", 0)), float(f.get("harvest", 0))
+    for m in range(1, a.months + 1):
+        eat = pop / 1000
+        stock = stock * 0.95 - eat
+        line = f"month {m}: eat {eat:.1f} units, spoil 5%"
+        if m % 12 == 9:
+            r = rng.randint(1, 6) + rng.randint(1, 6)
+            stock += crop * FOOD_HARVEST[r]
+            line += f", harvest 2d6 {r}: {crop * FOOD_HARVEST[r]:.0f}"
+        if m % 12 == 0:
+            pop *= 1.02
+            line += ", yearly growth 2%"
+        if stock < 0:
+            pop *= 0.95
+            line += f"; starving: 5% die, Control -10"
+            stock = 0
+        print(line + f"; stock {stock:.0f}, people {pop:.0f}")
+
+
+TAX_CLASS = {"land": "nobles", "trade": "merchants", "head": "peasants", "toll": "merchants", "tithe": "clergy"}
+
+
+def tax_collect(a):
+    if a.control is None or not 0 <= a.control <= 100:
+        die("--collect needs --control 0 to 100")
+    got = a.collect * a.control / 100
+    print(f"owed {a.collect:g}, Control {a.control:g}%: collected {got:.0f}")
+    print(f"{a.kind} tax: {TAX_CLASS[a.kind]} goodwill -1")
+
+
+ROUTE_MODS = {"road": -3, "war": 10, "escort": -5, "privateers": 8, "fort": -3, "stops": -2}  # loss % points; ours
+
+
+def trade_route(a):
+    import random
+    rng = random.Random(a.seed)
+    mods = [x.strip() for x in (a.mods or "").split(",") if x.strip()]
+    bad = [m for m in mods if m not in ROUTE_MODS]
+    if bad:
+        die("--mods from " + ", ".join(ROUTE_MODS))
+    p = max(1, 10 + sum(ROUTE_MODS[m] for m in mods))
+    print(f"loss chance {p}% a month (base 10, {', '.join(mods) or 'no modifiers'})")
+    lost = 0
+    for m in range(1, a.route + 1):
+        r = rng.randint(1, 100)
+        lost += r <= p
+        print(f"month {m}: d100 {r}: " + ("shipment lost" if r <= p else "arrives"))
+    if a.price:
+        print(f"delivered {a.route - lost} of {a.route}: worth {(a.route - lost) * a.price:g}")
+
+
+PLAGUE_RANGE = 20  # miles; ours
+
+
+def cmd_plague(a):
+    """Plague spreads between settlements within 20 miles; fire and abandonment as sub-modes."""
+    import random
+    rng = random.Random(a.seed)
+    d = load_json(a.file)
+    towns = {t["name"]: dict(t) for t in d.get("settlements", [])}
+    if a.start and a.start not in towns:
+        die(f"--start {a.start!r} is not a settlement")
+
+    def near(n, r):
+        return [m for m, mi in (towns[n].get("miles") or {}).items() if mi <= r and m in towns]
+    if a.mode == "abandon":
+        for n, t in towns.items():
+            was, now = t.get("was", t.get("pop", 0)), t.get("pop", 0)
+            if was and now < was / 2:
+                r = rng.randint(1, 6)
+                print(f"{n}: {now} of {was} left; d6 {r}: " + ("abandoned" if r <= 3 else "holds on"))
+            else:
+                print(f"{n}: holds")
+        return
+    if not a.start:
+        die(f"--mode {a.mode} needs --start")
+    if a.mode == "fire":
+        r = rng.randint(1, 6)
+        print(f"{a.start}: fire takes {r * 10}% of buildings, {towns[a.start].get('pop', 0) * r // 20} homeless")
+        for m in near(a.start, 5):
+            print(f"{m}: " + ("sparks carry: it burns too" if rng.randint(1, 6) == 1 else "spared"))
+        return
+    sick = {a.start: rng.randint(1, 3)}
+    for mo in range(1, a.months + 1):
+        new = []
+        for n in list(sick):
+            t = towns[n]
+            dead = t["pop"] // 3
+            t["pop"] -= dead
+            print(f"month {mo}: {n} loses {dead}, {t['pop']} left")
+            for m in near(n, PLAGUE_RANGE):
+                if m not in sick and m not in new and rng.randint(1, 6) >= (6 if a.quarantine else 4):
+                    new.append(m)
+            sick[n] -= 1
+            if sick[n] <= 0:
+                del sick[n]
+                print(f"month {mo}: {n} is past it")
+        for m in new:
+            sick[m] = rng.randint(1, 3)
+            print(f"month {mo}: it reaches {m}")
+        if not sick:
+            break
+    if a.quarantine:
+        print("quarantine: spread needs a 6 instead of 4+")
+
+
+def roster(spec):
+    out = []
+    for i, x in enumerate([x.strip() for x in spec.split(",") if x.strip()], 1):
+        name, _, b = x.partition(":")
+        out.append((i, name, int(b) if b.strip().lstrip("-").isdigit() else 0))
+    return out
+
+
+def sessionlog_roster(a):
+    rs = roster(a.roster)
+    print("| # | character | hidden check (d20 vs 15) |\n|---|---|---|")
+    for i, n, b in rs:
+        print(f"| {i} | {n} | {min(100, max(0, (6 + b) * 5))}% |")
+    print(f"\nvictim roll: d{len(rs)} on the numbers above; marching order and lights use the same numbers")
+
+
+def sessionlog_sheet(a):
+    rs = roster(a.roster) if a.roster else []
+    nums = [str(i) for i, _, _ in rs] or ["_"] * (a.width * 3)
+    print(f"## Marching order (corridor {a.width} wide)")
+    print("| " + " | ".join(f"file {i + 1}" for i in range(a.width)) + " |\n|" + "---|" * a.width)
+    for r in range(0, max(len(nums), a.width), a.width):
+        print("| " + " | ".join((nums[r:r + a.width] + ["_"] * a.width)[:a.width]) + " |")
+    print("\n## Lights\n| # | light | turn lit | burns out |\n|---|---|---|---|\n|  |  |  |  |")
+    print("\n## Foes\n| foe # | kind | where | treasure |\n|---|---|---|---|\n| 1 |  |  |  |")
+    print("\n## Treasure found\n| type | what | who took it |\n|---|---|---|\n|  |  |  |")
+    print("\n## Unusual events\n- ")
+
+
+def reaction_rank(gap):
+    m = max(-2, min(2, gap))
+    print(f"rank gap {gap:+d}: {m:+d} to the reaction")
+    if gap >= 2:
+        print(f"the watch looks away from a small offence on d6 1-{min(5, gap)}")
+    return m
+
+
+SANDBOX_KIT = 7  # one hex and its six neighbours
+
+
+def sandbox_kit(d, warns):
+    s = d.get("start") or {}
+    kit, home = s.get("kit") or [], sandbox_hex(s.get("hex"))
+    if not kit:
+        return
+    if len(kit) > SANDBOX_KIT:
+        warns.append(f"starting kit spans {len(kit)} hexes; keep it to one hex and its 6 neighbours")
+    if home:
+        far = [h for h in kit if sandbox_hex(h) and (abs(sandbox_hex(h)[0] - home[0]) > 1
+                                                     or abs(sandbox_hex(h)[1] - home[1]) > 1)]
+        if far:
+            warns.append(f"starting kit hexes {', '.join(far)} are not next to the start hex {s['hex']}")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -9863,7 +10301,10 @@ def main(argv=None):
     s.add_argument("--pcs", help="--spotlight: PC names a,b (else ## PCs)")
     s.set_defaults(fn=cmd_threads)
     s = sub.add_parser("session-log", help="print a session log template that feeds the next prep card")
-    s.add_argument("--session", type=int, default=1); s.set_defaults(fn=cmd_sessionlog)
+    s.add_argument("--session", type=int, default=1)
+    s.add_argument("--roster", help="numbered characters, Name:bonus,Name:bonus")
+    s.add_argument("--sheet", action="store_true", help="marching grid, lights, foes, treasure, unusual events")
+    s.add_argument("--width", type=int, default=2, help="--sheet: corridor width"); s.set_defaults(fn=cmd_sessionlog)
     s = sub.add_parser("npcs", help="check three-line NPC cards")
     s.add_argument("card"); s.add_argument("--but", action="store_true", help="warn on NPCs with no contradiction")
     s.add_argument("--agenda", action="store_true", help="warn on NPCs without 2+ goals: and a tell:")
@@ -9933,6 +10374,7 @@ def main(argv=None):
     s = sub.add_parser("reaction", help="roll an improvised NPC's first reaction")
     s.add_argument("--mod", type=int, action="append")
     s.add_argument("--approach", choices=["friendly", "neutral", "hostile"], default="neutral")
+    s.add_argument("--rank-gap", type=int, help="PC rank minus NPC rank")
     s.add_argument("--roll", type=int); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_reaction)
     s = sub.add_parser("heat", help="faction standing and heat ledger")
     s.add_argument("action", choices=["show", "crime", "standing", "cool", "told"]); s.add_argument("faction", nargs="?")
@@ -10008,6 +10450,8 @@ def main(argv=None):
     s.add_argument("--weights", default=TRADE_WEIGHTS)
     s.add_argument("--capacity", type=int); s.add_argument("--sold", type=int)
     s.add_argument("--regional", action="store_true", help="goods found only in the source region")
+    s.add_argument("--route", type=int, help="months of shipments: a loss check each month")
+    s.add_argument("--mods", help="--route: " + ",".join(ROUTE_MODS))
     s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_trade)
     s = sub.add_parser("cadence", help="do your prep phases fit between sessions (20% slack)")
@@ -10113,6 +10557,9 @@ def main(argv=None):
     s.add_argument("--bribe", type=float, help="offer this much; banded by --wealth (ours)")
     s.add_argument("--wealth", type=float, help="--bribe: the NPC's usual monthly take")
     s.add_argument("--honest", action="store_true", help="--bribe: any bribe offends")
+    s.add_argument("--ask", action="store_true", help="the price they want: --danger, --exposure, --urgency, --rival")
+    s.add_argument("--danger", type=int, default=0); s.add_argument("--exposure", type=int, default=0)
+    s.add_argument("--urgency", type=int, default=0); s.add_argument("--rival", type=float, help="a rival's bid")
     s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_negotiate)
     s = sub.add_parser("spell", help="spell cost, or check homebrew spells")
     s.add_argument("action", choices=["cost", "check", "forge"]); s.add_argument("file", nargs="?")
@@ -10285,6 +10732,9 @@ def main(argv=None):
     s.add_argument("--grant", action="store_true", help="land reward cards: owner, yield, service, opt_out")
     s.add_argument("--changing-times", action="store_true", help="template lint, tension clock with a sign, jurisdiction")
     s.add_argument("--check", action="store_true", help="header fields, minority bands (many, some, few), backers or threats")
+    s.add_argument("--turn", action="store_true", help="a monthly regime turn from the regime block")
+    s.add_argument("--food", action="store_true", help="months of food from the food block")
+    s.add_argument("--months", type=int, default=12); s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_realm)
     s = sub.add_parser("doomtrack", help="check a doom track: spaces with events, scene costs, outcomes per solved paths")
     s.add_argument("file", nargs="?")
@@ -10427,6 +10877,8 @@ def main(argv=None):
     s.add_argument("--band", choices=[b["name"] for b in SIZE_BANDS]); s.add_argument("--population", type=int)
     s.add_argument("--mult", type=float, help="price multiplier instead of the band's")
     s.add_argument("--rate", type=float, help="tax as a share of upkeep instead of the tier's")
+    s.add_argument("--collect", type=float, help="tax owed; collected by --control")
+    s.add_argument("--control", type=float); s.add_argument("--kind", choices=list(TAX_CLASS), default="land")
     s.add_argument("--people", type=int, default=1); s.set_defaults(fn=cmd_tax)
     s = sub.add_parser("citychange", help="city change clock deck: check, draw, advance per session")
     s.add_argument("action", choices=["check", "draw", "advance"]); s.add_argument("deck")
@@ -10522,6 +10974,37 @@ def main(argv=None):
     s.add_argument("--promote", help="why this building matters; numbers it in the ledger")
     s.add_argument("--ledger", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "buildings.json"))
     s.set_defaults(fn=cmd_building)
+    s = sub.add_parser("trial", help="an opposed court roll: days held, verdict, fine, sentence or debt servitude")
+    s.add_argument("--crime", choices=list(TRIAL_CRIME), default="serious")
+    s.add_argument("--advocate", type=int, default=0); s.add_argument("--prosecutor", type=int, default=0)
+    s.add_argument("--witnesses", type=int, default=0); s.add_argument("--against", type=int, default=1)
+    s.add_argument("--evidence", choices=list(TRIAL_EVIDENCE), default="weak")
+    s.add_argument("--rank-gap", type=int, default=0, help="accused rank minus accuser rank")
+    s.add_argument("--rank", type=int, choices=range(len(TRIAL_RANKS)), default=2, help="accused rank 0-5")
+    s.add_argument("--purse", type=float); s.add_argument("--wage", type=float, default=10)
+    s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_trial)
+    s = sub.add_parser("blaze", help="fire spreading over a building adjacency list")
+    s.add_argument("file"); s.add_argument("--start", required=True); s.add_argument("--hours", type=int, default=6)
+    s.add_argument("--brigade", type=int, default=0, help="bucket crews"); s.add_argument("--seed", type=int)
+    s.set_defaults(fn=cmd_blaze)
+    s = sub.add_parser("haggle", help="a hidden vendor price floor; --stalls N shops a district")
+    s.add_argument("--base", type=float, required=True); s.add_argument("--stalls", type=int, default=1)
+    for k in HAGGLE_MOD:
+        s.add_argument("--" + k, action="store_true")
+    s.add_argument("--offer", type=float); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_haggle)
+    s = sub.add_parser("populate", help="lairs per hex with pre-play clashes; --migrate for a season")
+    s.add_argument("--hexes", type=int, required=True); s.add_argument("--migrate", action="store_true")
+    s.add_argument("--season", choices=list(POPULATE_SEASON)); s.add_argument("--cleared", help="cleared hex numbers")
+    s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_populate)
+    s = sub.add_parser("invest", help="build a road, bridge, canal, inn, farm or tourism in the realm")
+    s.add_argument("--kind", choices=list(INVEST), required=True); s.add_argument("--gp", type=float, required=True)
+    s.add_argument("--years", type=int, default=5); s.add_argument("--no-upkeep", action="store_true")
+    s.set_defaults(fn=cmd_invest)
+    s = sub.add_parser("plague", help="plague spread between settlements; --mode fire or abandon")
+    s.add_argument("file"); s.add_argument("--mode", choices=["plague", "fire", "abandon"], default="plague")
+    s.add_argument("--start"); s.add_argument("--months", type=int, default=6)
+    s.add_argument("--quarantine", action="store_true"); s.add_argument("--seed", type=int)
+    s.set_defaults(fn=cmd_plague)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
