@@ -1338,6 +1338,10 @@ NPC_EXTRA = ("major", "secret", "joins_party", "exit", "tactics", "but", "roles"
 
 def cmd_npcs(a):
     """Three-line NPC cards: '- Name: look; doing now; hook because why'."""
+    if a.whereabouts:
+        return npcs_whereabouts(a)
+    if not a.card:
+        die("npcs needs a card, or --whereabouts TIME")
     sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
     npcs = [l[2:].strip() for l in sec.get("npcs", []) if l[:2] in ("- ", "* ")]
     if not npcs:
@@ -1827,6 +1831,10 @@ def cmd_tavern(a):
 
 def cmd_venues(a):
     """Venue counts for a settlement against one tavern per 2,000, restaurant per 3,500, inn per 5,000."""
+    if a.den:
+        return venues_den(a)
+    if a.population is None:
+        die("venues needs --population, or --den")
     errs, warns = [], []
     for kind, per, have in (("taverns", 2000, a.taverns), ("restaurants", 3500, a.restaurants), ("inns", 5000, a.inns)):
         floor = size_band(population=max(1, a.population))["venue_floor"][kind]
@@ -2477,6 +2485,10 @@ def cmd_premise(a):
 def cmd_wander(a):
     """Random-encounter clock: checks per period, then distance, surprise, reaction or evasion. Numbers configurable."""
     import random
+    if a.per_hex:
+        return wander_per_hex(a)
+    if a.build:
+        return wander_build(a)
     if a.from_rooms:
         return wander_from_rooms(a.from_rooms)
     if a.split:
@@ -2854,6 +2866,10 @@ def cmd_travel(a):
         travel_watches(a)
         if a.miles is None:
             return
+    if a.transition:
+        travel_transition(a)
+        if a.miles is None:
+            return
     if a.miles is None:
         die("travel needs --miles (or --watches N for the day and night rhythm)")
     if a.terrain not in TERRAIN:
@@ -2871,6 +2887,8 @@ def cmd_travel(a):
     over = max(0, a.hours - 8)
     if over:
         print(f"fatigue: {math.ceil(over)} point(s) a day from {over:g} hour(s) past 8; {math.ceil(over) * whole} over the trip")
+    if a.carry:
+        travel_carry(a, per_day / (1 if a.known else 1.25), whole)
     travel_checks(a, whole)
 
 
@@ -5772,6 +5790,8 @@ def cmd_doomtrack(a):
 
 def cmd_rumors(a):
     """Rumour or lead list JSON: each lead has a skill, a dc, what it reveals and where it points; mixed skills and DCs."""
+    if a.calendar:
+        return rumor_calendar(a)
     if a.retold:
         rumor_retold(a)
         if not a.file:
@@ -6121,6 +6141,8 @@ SITE_SIGNS = 2
 
 def cmd_site(a):
     """Site prep JSON: location, entries, upkeep, ecology, visitors; doors, drops, treasure, rumours; a clock with signs."""
+    if a.bluffs is not None:
+        return site_bluffs(a)
     if a.recorrupt is not None:
         return site_recorrupt(a)
     if a.edge or a.ward:
@@ -6632,6 +6654,8 @@ ADVENTURE_PILLARS = ("combat", "social", "explore", "either")
 def cmd_adventure(a):
     """Adventure JSON {scenes: [{name, pillar, optional}]}: --pillars counts required and optional scenes per
     pillar; warns when combat or social is missing, one pillar holds over half, or nothing is optional."""
+    if a.false_patron:
+        return adventure_false_patron(a)
     if a.matrix:
         return adventure_matrix(a)
     if a.day:
@@ -10266,6 +10290,8 @@ def cmd_odds(a):
         edge = ", but there is a near miss"
     print(f"{a.question}: {k} ({t}%), d100 {roll}: {'yes' if yes else 'no'}{edge}")
     print("for facts the GM has not decided; a fact already written stays as written")
+    if a.shown:
+        odds_shown(a, t)
 
 
 CUT_ENDS = ("cliffhanger", "resolved", "pause", "decision")
@@ -10600,6 +10626,189 @@ def campaign_epic(c):
     report(errs, warns, f"epic: {len(e.get('pcs', []))} PC(s), {len(e.get('jobs', []))} job(s)")
 
 
+# 0.43.0: Greyhawk Adventures and Forgotten Realms Campaign Set ideas. Tables, numbers and words are ours.
+def adventure_false_patron(a):
+    """{patron: {name, motive, knows, intermediaries, betrayal_trigger, escape}}: a patron secretly behind the problem."""
+    d = load_json(a.file)
+    p = d.get("patron") if isinstance(d, dict) else None
+    if not isinstance(p, dict):
+        die("--false-patron wants {patron: {motive, knows, intermediaries, betrayal_trigger, escape}}")
+    errs, warns = [], []
+    for k, why in (("motive", "the real reason they hired the party"), ("knows", "what they know and hide"),
+                   ("betrayal_trigger", "what makes them turn on the party"), ("escape", "how they get away when found out")):
+        if not p.get(k):
+            errs.append(f"no {k}: ({why})")
+    if not p.get("intermediaries"):
+        warns.append("no intermediaries: one go-between keeps the patron deniable and gives the party a trail")
+    if not p.get("tell"):
+        warns.append("no tell: a small slip the party can notice before the betrayal")
+    report(errs, warns, f"false patron {p.get('name', '?')}")
+
+
+BLUFF_KINDS = ("a painted warning", "bones on stakes", "a tale of a curse", "noises in the dark",
+               "a harmless illusion", "a dead scout left as a sign", "a sealed door with dire runes", "fake tracks of a beast")
+
+
+def site_bluffs(a):
+    """N layered deterrents, mostly fakes, one real guard hidden among them, then a guardian that breaks after losses."""
+    import random
+    if a.bluffs < 2:
+        die("--bluffs wants 2 or more layers")
+    rng = random.Random(a.seed)
+    picks = rng.sample(range(max(a.bluffs, len(BLUFF_KINDS))), a.bluffs)
+    real = rng.randint(1, a.bluffs)
+    for i, k in enumerate(picks, 1):
+        print(f"layer {i}: {BLUFF_KINDS[k % len(BLUFF_KINDS)]}" + (" (REAL: a true guard behind it)" if i == real else " (fake)"))
+    breaks = max(1, a.guardian // 3)
+    print(f"guardian layer: {a.guardian} defenders; they break and flee after {breaks} fall")
+    print("after a fake or two the party stops believing; the real one lands because it looks like the rest")
+
+
+WHEREABOUTS = {"morning": (60, 30, 10), "day": (20, 60, 20), "evening": (40, 30, 30), "night": (70, 10, 20)}
+
+
+def npcs_whereabouts(a):
+    """Where a key NPC is by time of day: home, out on business, or in the crowd in disguise. Percentages ours."""
+    import random
+    home, out, hid = WHEREABOUTS[a.whereabouts]
+    print(f"{a.whereabouts}: home {home}%, out {out}%, disguised in the crowd {hid}%")
+    roll = a.roll if a.roll is not None else random.Random(a.seed).randint(1, 100)
+    where = "home" if roll <= home else "out on business" if roll <= home + out else "disguised in the crowd"
+    print(f"d100 {roll}: {where}")
+
+
+DEN_GAMES = ("high-low: call over or under 4 on a d6, pays even",
+             "lucky seven: 2d6, a 7 pays four to one",
+             "odd or even: a d6, pays even, the house takes ties on 1")
+DEN_FLOOR = ("a cheat caught at the next table", "a debtor begging a stake", "a guard off duty and losing",
+             "a rival betting big", "a pickpocket working the crowd", "a fight over a pot",
+             "an informer selling a rumour", "the owner's enforcer watching the party")
+
+
+def venues_den(a):
+    """A gambling den night: crowd size, the house's payout cap, the games, two floor encounters in no fixed order."""
+    import random
+    rng = random.Random(a.seed)
+    crowd = (rng.randint(1, 6) + rng.randint(1, 6)) * 5
+    print(f"crowd: {crowd} gamblers tonight")
+    print(f"house cap: pays out at most {a.cap} gp a night; past that it closes the tables or calls the enforcer")
+    for g in DEN_GAMES:
+        print("game: " + g)
+    for e in rng.sample(DEN_FLOOR, 2):
+        print("floor: " + e + " (any order)")
+
+
+ODDS_SHOWN = {"safe": 75, "risky": 50, "deadly": 25}
+
+
+def odds_shown(a, true):
+    """Pair the true chance with how it is played: describe the shown level, roll against the true one."""
+    print(f"shown as {a.shown}, true chance {true}%: describe it as {a.shown}, roll against {true}%")
+    if ODDS_SHOWN[a.shown] > true:
+        print(f"warn: shown {a.shown} is safer than the true odds; the point is to play danger above the real chance")
+
+
+def travel_carry(a, per_day, days):
+    """Day by day hexes: the part-hex left at day's end carries over; the goal in the current hex means push on."""
+    hexm = a.hex_miles
+    pos = 0.0
+    for d in range(1, days + 1):
+        left = a.miles - pos
+        if left <= per_day:
+            print(f"day {d}: arrive after {left:.1f} miles")
+            return
+        pos += per_day
+        h, frac = divmod(pos, hexm)
+        print(f"day {d}: {pos:.1f} miles, hex {int(h)} plus {frac / hexm:.2f} carried to tomorrow")
+        if a.miles - pos <= per_day / 4:
+            print(f"day {d}: goal is in this hex, {a.miles - pos:.1f} miles on: push on and arrive tonight, or camp")
+            return
+
+
+def travel_transition(a):
+    """Rest-of-day miles change with the terrain: harder x0.5 (x0.25 at 4x as hard), easier x1.5 (x2 at 4x)."""
+    try:
+        f, t = a.transition.split("-", 1)
+        rf, rt = TERRAIN[f], TERRAIN[t]
+    except (ValueError, KeyError):
+        die(f"--transition FROM-TO, each one of {', '.join(TERRAIN)}")
+    ratio = rt / rf
+    mult = 0.25 if ratio <= 0.25 else 0.5 if ratio < 1 else 2 if ratio >= 4 else 1.5 if ratio > 1 else 1
+    left = a.left if a.left is not None else a.pace * rf / 2
+    print(f"{f} to {t}: {left:g} miles left today become {left * mult:g} (x{mult:g})")
+
+
+WANDER_STATUS = {"civilized": 12, "border": 8, "wild": 6}
+WANDER_TERRAIN_ORDER = ("mountain", "swamp", "forest", "hills", "desert", "plains", "road")
+
+
+def wander_per_hex(a):
+    """A check on each hex entered: civilized within 18 mi of a city or 6 of a town, border to double that, else wild."""
+    st = a.status
+    if not st:
+        if a.city_miles is None and a.town_miles is None:
+            die("--per-hex wants --status, or --city-miles / --town-miles")
+        c = a.city_miles if a.city_miles is not None else 1e9
+        t = a.town_miles if a.town_miles is not None else 1e9
+        st = "civilized" if c <= 18 or t <= 6 else "border" if c <= 36 or t <= 12 else "wild"
+    n = WANDER_STATUS[st]
+    print(f"{st}: one check per hex entered, 1 in {n}; {a.hexes} hex(es): about {a.hexes / n:.1f} encounters")
+    if a.mixed:
+        ts = [x.strip() for x in a.mixed.split(",") if x.strip()]
+        bad = [x for x in ts if x not in WANDER_TERRAIN_ORDER]
+        if bad:
+            die(f"--mixed terrain {bad[0]!r}, use {', '.join(WANDER_TERRAIN_ORDER)}")
+        top = min(ts, key=WANDER_TERRAIN_ORDER.index)
+        print(f"mixed hex: roll on the {top} table (the harder terrain wins)")
+
+
+def wander_build(a):
+    """A bell table from two different dice summed: rare edges, common middle; one common slot may hold two rares."""
+    try:
+        x, y = (int(s.strip().lstrip("d")) for s in a.build.lower().split("+"))
+    except ValueError:
+        die("--build wants two dice like d6+d8")
+    if x == y or min(x, y) < 2:
+        die("--build wants two different dice (d4+d6, d6+d8, d8+d12 ...)")
+    counts = {}
+    for i in range(1, x + 1):
+        for j in range(1, y + 1):
+            counts[i + j] = counts.get(i + j, 0) + 1
+    top = max(counts.values())
+    for s, c in sorted(counts.items()):
+        band = "common" if c == top else "uncommon" if c * 2 > top else "rare"
+        print(f"{s:>3}: {c / (x * y) * 100:4.1f}%  {band}")
+    print("rare beasts on the edges, everyday ones in the middle; a common slot may hold two rares (roll again to pick)")
+
+
+def rumor_calendar(a):
+    """{items: [{id, happened, month, text, updates, dead_end, cancelled_by}]}: news by month with its lag."""
+    d = load_json(a.calendar)
+    items = d.get("items") if isinstance(d, dict) else d
+    if not items:
+        die("--calendar wants {items: [{id, happened, month, text}]}")
+    errs, warns, seen = [], [], {}
+    for it in sorted(items, key=lambda i: i.get("month", 0) if isinstance(i.get("month"), int) else 0):
+        iid, m, h = it.get("id", "?"), it.get("month"), it.get("happened", it.get("month"))
+        if not isinstance(m, int) or not isinstance(h, int):
+            errs.append(f"{iid}: month and happened want whole numbers")
+            continue
+        if m < h:
+            errs.append(f"{iid}: heard in month {m} before it happened in month {h}")
+        up = it.get("updates")
+        if up and seen.get(up, 10 ** 9) >= m:
+            errs.append(f"{iid}: updates {up}, which is not an earlier item")
+        seen[iid] = m
+        if it.get("cancelled_by"):
+            print(f"month {m}: {iid}: cancelled by {it['cancelled_by']}, do not tell it")
+            continue
+        tag = (f", updates {up}" if up else "") + (" [dead end]" if it.get("dead_end") else "")
+        print(f"month {m}: {iid}: {it.get('text', '')} (lag {m - h}){tag}")
+    if not any(it.get("dead_end") for it in items):
+        warns.append("no dead_end item; some news should lead nowhere")
+    report(errs, warns, f"{len(items)} news item(s)")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -10719,7 +10928,9 @@ def main(argv=None):
     s.add_argument("--sheet", action="store_true", help="marching grid, lights, foes, treasure, unusual events")
     s.add_argument("--width", type=int, default=2, help="--sheet: corridor width"); s.set_defaults(fn=cmd_sessionlog)
     s = sub.add_parser("npcs", help="check three-line NPC cards")
-    s.add_argument("card"); s.add_argument("--but", action="store_true", help="warn on NPCs with no contradiction")
+    s.add_argument("card", nargs="?")
+    s.add_argument("--whereabouts", choices=list(WHEREABOUTS), help="where a key NPC is at this time of day")
+    s.add_argument("--roll", type=int); s.add_argument("--seed", type=int); s.add_argument("--but", action="store_true", help="warn on NPCs with no contradiction")
     s.add_argument("--agenda", action="store_true", help="warn on NPCs without 2+ goals: and a tell:")
     s.add_argument("--recurring", action="store_true", help="recurring NPCs: reacts, danger, questions, survival, unique names")
     s.add_argument("--pcs", help="--recurring: a,b PC names each recurring NPC reacts: to")
@@ -10774,7 +10985,10 @@ def main(argv=None):
     s = sub.add_parser("tavern", help="check a tavern or inn card")
     s.add_argument("card"); s.set_defaults(fn=cmd_tavern)
     s = sub.add_parser("venues", help="taverns, restaurants and inns for a population")
-    s.add_argument("--population", type=int, required=True)
+    s.add_argument("--population", type=int)
+    s.add_argument("--den", action="store_true", help="a gambling den night: crowd, payout cap, games, floor")
+    s.add_argument("--cap", type=int, default=500, help="--den: most the house pays out a night")
+    s.add_argument("--seed", type=int)
     for k in ("taverns", "restaurants", "inns"):
         s.add_argument("--" + k, type=int)
     s.add_argument("--anomaly", help="the story reason for an odd count")
@@ -10819,6 +11033,11 @@ def main(argv=None):
     s.add_argument("--bump", type=int, default=0, help="after an encounter the next check's N drops by this (noise)")
     s.add_argument("--table", help="table JSON [{name, combat, weight}]: warn on a non-combat share under 30%%")
     s.add_argument("--risk", choices=list(WANDER_RISK), help="distance from authority: adds to each group's count")
+    s.add_argument("--per-hex", action="store_true", help="one check per hex entered, odds by --status")
+    s.add_argument("--status", choices=list(WANDER_STATUS)); s.add_argument("--hexes", type=int, default=1)
+    s.add_argument("--city-miles", type=float); s.add_argument("--town-miles", type=float)
+    s.add_argument("--mixed", help="--per-hex: terrains in a mixed hex, a,b")
+    s.add_argument("--build", metavar="dX+dY", help="bell table from two different dice summed")
     s.add_argument("--run", action="store_true"); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_wander)
     s = sub.add_parser("battle", help="a mass battle as three representative fights")
     s.add_argument("plan"); s.add_argument("--results", help="outcome of each fight in order: won,lost,drawn")
@@ -10856,6 +11075,10 @@ def main(argv=None):
     s.add_argument("--road-segment", nargs="?", const="", metavar="FILE",
                    help="per watch: none, mundane or dangerous, then the band's table (FILE: segments [{name, mundane, dangerous}])")
     s.add_argument("--segment-odds", default="13/19", help="--road-segment: d20 floors for mundane/dangerous (ours)")
+    s.add_argument("--carry", action="store_true", help="day by day hexes, part-hexes carried over")
+    s.add_argument("--hex-miles", type=float, default=6, help="--carry: miles across a hex")
+    s.add_argument("--transition", metavar="FROM-TO", help="rest-of-day miles when the terrain changes")
+    s.add_argument("--left", type=float, help="--transition: miles left today on the old terrain")
     s.set_defaults(fn=cmd_travel)
     s = sub.add_parser("journey", help="roll journey leads from your tables, or --check a lead slate")
     s.add_argument("file"); s.add_argument("--kind", choices=["simple", "complex"], default="simple")
@@ -11199,6 +11422,8 @@ def main(argv=None):
     s.add_argument("--threats", action="store_true", help="neighbour reactions and why nobody built here before")
     s.add_argument("--edge", action="store_true", help="areas: a fall-safety item before the first lethal edge")
     s.add_argument("--ward", action="store_true", help="areas: a warded area needs a non-magical route in")
+    s.add_argument("--bluffs", type=int, help="N layered deterrents, mostly fake, one real, then a guardian")
+    s.add_argument("--guardian", type=int, default=6, help="--bluffs: defenders in the guardian layer")
     s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_site)
     s = sub.add_parser("interrogate", help="check an interrogation ladder: ascending DCs, truth tags, the real story")
@@ -11222,6 +11447,7 @@ def main(argv=None):
     s.add_argument("--retold", type=int, help="retellings: the scale grows and each teller adds a bias")
     s.add_argument("--event", help="--retold: what really happened"); s.add_argument("--size", type=int, default=4)
     s.add_argument("--hours", type=float, default=1); s.add_argument("--seed", type=int)
+    s.add_argument("--calendar", metavar="FILE", help="news by month: lag, updates, dead ends, cancelled items")
     s = sub.add_parser("triggers", help="check IF/THEN triggers: bound or unbound, a visible result each")
     s.add_argument("file"); s.set_defaults(fn=cmd_triggers)
     s = sub.add_parser("guild", help="check guild quest-board cards: where, how far, contact, proof, voucher, rank")
@@ -11282,6 +11508,7 @@ def main(argv=None):
     s.add_argument("--day", action="store_true", help="fight load per day between long rests; three hard in a row")
     s.add_argument("--cap", type=float, default=DAY_CAP, help="--day: load a party can take (ours)")
     s.add_argument("--matrix", choices=MATRICES, help="events and scenes against a plot matrix")
+    s.add_argument("--false-patron", action="store_true", help="patron {motive, knows, intermediaries, betrayal_trigger, escape}")
     s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_adventure)
     s = sub.add_parser("mastery", help="mastery marks per school: 4 from one trigger kind, the 4th halves the cost")
@@ -11444,6 +11671,7 @@ def main(argv=None):
     s.add_argument("question"); g = s.add_mutually_exclusive_group()
     g.add_argument("--likely", action="store_true"); g.add_argument("--even", action="store_true")
     g.add_argument("--unlikely", action="store_true")
+    s.add_argument("--shown", choices=list(ODDS_SHOWN), help="how the danger is described, apart from the true odds")
     s.add_argument("--roll", type=int); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_odds)
     s = sub.add_parser("cuts", help="split-party cut plan: tags, off-stage streaks, cliffhangers, knowledge rule")
     s.add_argument("file"); s.add_argument("--max-off", type=int, default=2, help="cuts a PC may sit out in a row")
