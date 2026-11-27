@@ -1552,6 +1552,10 @@ def report(errs, warns, ok):
 def cmd_villain(a):
     """Villain cards: one '## Name' section each with wants:, public:, reach:, 2+ harm:, offers with 2+ options."""
     sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
+    if a.org:
+        if not sec:
+            die("no '## Name' sections")
+        return villain_org(sec)
     errs, warns = [], []
     for name, lines in sec.items():
         b = [l[2:].strip() for l in lines if l[:2] in ("- ", "* ")]
@@ -1595,6 +1599,10 @@ def cmd_villain(a):
             warns.append(f"{name}: met in one place only; give two or more (where: a, b) so a missed scene is not a lost villain")
         if a.scheme:
             villain_scheme(name, lines, key, warns)
+        if a.interview:
+            villain_interview(name, key, errs, warns)
+        if a.key:
+            villain_key(name, key, errs)
     if not sec:
         die("no '## Name' villain sections")
     villain_clues(sec, a.clues, warns, errs)
@@ -1633,6 +1641,8 @@ def cmd_twist(a):
 def cmd_campaign(a):
     """Campaign plan JSON: every PC has a plotline, adventures have phase and why, NPCs stay out once written out."""
     c = json.loads(Path(a.plan).read_text(encoding="utf-8"))
+    if a.epic:
+        return campaign_epic(c)
     if a.pacing:
         return campaign_pacing(c)
     adv, errs, warns = c.get("adventures", []), [], []
@@ -2374,8 +2384,12 @@ def cmd_reaction(a):
     mods = sum(a.mod or []) + {"friendly": 1, "neutral": 0, "hostile": -2}[a.approach]
     if a.rank_gap is not None:
         mods += reaction_rank(a.rank_gap)
+    if a.asked:
+        mods += reaction_asked(a.asked)
+        print(f"asked {a.asked} time(s) before: {reaction_asked(a.asked):+d}")
     total = roll + mods
-    print(f"roll {roll} {mods:+d} = {total}: {reaction_band(total)}")
+    band, why = reaction_clamp(reaction_band(total), a.best_case, a.worst_case)
+    print(f"roll {roll} {mods:+d} = {total}: {band}" + (f" ({why})" if why else ""))
     print("use it for NPCs made on the spot; a written NPC reacts as written")
 
 
@@ -2863,6 +2877,10 @@ def cmd_travel(a):
 # 0.11.0 and up: calendar, hirelings, districts, chases. Numbers and wording are ours.
 def cmd_calendar(a):
     """World-day ledger JSON {"groups": {name: [{"day": N, "event": "..."}]}}: flags split groups that drift apart."""
+    if a.holidays:
+        return calendar_holidays(a)
+    if not a.file:
+        die("calendar needs a file, or --holidays")
     d = json.loads(Path(a.file).read_text(encoding="utf-8"))
     groups = d.get("groups", d) if isinstance(d, dict) else None
     if not isinstance(groups, dict) or not groups:
@@ -3121,6 +3139,8 @@ def cmd_trap(a):
     if a.reset:
         errs += trap_reset_errors(traps)
     trap_fields_v033(traps, a, errs, warns)
+    if a.rooms and len(traps) * 4 > a.rooms:
+        warns.append(f"{len(traps)} traps in {a.rooms} rooms, over about 1 in 4; players slow to a crawl")
     deadly = [t for t in traps if t.get("severity") == "deadly"]
     if deadly and len(deadly) * 2 > len(traps):
         warns.append(f"{len(deadly)} of {len(traps)} traps are deadly; most should cost resources, not lives")
@@ -3184,7 +3204,9 @@ def cmd_attendance(a):
     except json.JSONDecodeError:
         pcs = [l.strip() for l in text.splitlines() if l.strip() and not l.startswith("#")]
     n = len(pcs)
-    if not n or not 0 <= a.present <= n:
+    if a.leaves:
+        return attendance_leaves(a)
+    if a.present is None or not n or not 0 <= a.present <= n:
         die(f"--present must be 0 to {n} (roster size)")
     print(f"{a.present} of {n} present")
     if a.present * 2 <= n:
@@ -3300,6 +3322,10 @@ def cmd_tpk(a):
         print(why)
         if verdict == "not earned":
             print("warn: an unearned death costs trust; talk to the player before the next session")
+        if not a.cause:
+            return
+    if a.reprieve:
+        tpk_reprieve(a)
         if not a.cause:
             return
     if a.capture:
@@ -3835,6 +3861,8 @@ def cmd_morale(a):
         except ValueError:
             die(f"--mod NAME=V, got {m}")
         print(f"{k}: {int(v):+d}")
+    if a.recover is not None:
+        return morale_recover(a)
     if a.leader_cumulative is not None:
         return morale_leader(a)
     if a.outnumbered is not None:
@@ -3940,6 +3968,10 @@ def cmd_rooms(a):
     if a.force:
         return rooms_force(a)
     rooms = load_list(a.file, "rooms")
+    if a.readaloud:
+        return rooms_readaloud(rooms)
+    if a.surrender:
+        return rooms_surrender(rooms)
     if a.eras:
         return rooms_eras(a, rooms)
     if a.skip:
@@ -4728,6 +4760,8 @@ def cmd_supply(a):
 def cmd_siege(a):
     """Structure points to a garrison capacity, the blockade, breaches from bombardment, and days to fall."""
     d = load_json(a.file)
+    if a.phases:
+        return siege_phases(d, a.seed)
     f, s = d.get("fortress", {}), d.get("siege", {})
     warns = []
     cap = f.get("structure", 0) // max(1, f.get("per_unit", 1))
@@ -5738,6 +5772,10 @@ def cmd_doomtrack(a):
 
 def cmd_rumors(a):
     """Rumour or lead list JSON: each lead has a skill, a dc, what it reveals and where it points; mixed skills and DCs."""
+    if a.retold:
+        rumor_retold(a)
+        if not a.file:
+            return
     if getattr(a, "venue", None):
         rumor_venue(a)
         if not a.file:
@@ -6594,6 +6632,8 @@ ADVENTURE_PILLARS = ("combat", "social", "explore", "either")
 def cmd_adventure(a):
     """Adventure JSON {scenes: [{name, pillar, optional}]}: --pillars counts required and optional scenes per
     pillar; warns when combat or social is missing, one pillar holds over half, or nothing is optional."""
+    if a.matrix:
+        return adventure_matrix(a)
     if a.day:
         return adventure_day(a)
     if a.elements or a.info or a.twists or a.epilogue or a.hook:
@@ -10187,6 +10227,379 @@ def sandbox_kit(d, warns):
             warns.append(f"starting kit hexes {', '.join(far)} are not next to the start hex {s['hex']}")
 
 
+# 0.42.0: GURPS 4e Campaigns, DMGR5, DMGR1, DMGR2, DMGR6, DM's Guide to Immortals ideas. Numbers and wording are ours.
+REACTION_ORDER = [b for _, b in REACTION_BANDS]
+
+
+def reaction_asked(n):
+    """Penalty for asking the same NPC again: -1 per earlier ask, -2 each from the third (ours)."""
+    return -sum(1 if i < 2 else 2 for i in range(max(0, n)))
+
+
+def reaction_clamp(band, best, worst):
+    i = REACTION_ORDER.index(band)
+    if best and i > REACTION_ORDER.index(best):
+        return best, f"capped at best case {best}"
+    if worst and i < REACTION_ORDER.index(worst):
+        return worst, f"floored at worst case {worst}"
+    return band, ""
+
+
+ODDS = {"likely": 75, "even": 50, "unlikely": 25}
+
+
+def cmd_odds(a):
+    """A yes/no fact oracle: d100 against GM-set odds; a roll far inside or outside adds 'and' or 'but'."""
+    import random
+    k = "likely" if a.likely else "unlikely" if a.unlikely else "even"
+    t = ODDS[k]
+    roll = a.roll if a.roll is not None else random.Random(a.seed).randint(1, 100)
+    yes = roll <= t
+    edge = ""
+    if yes and roll <= max(1, t // 5):
+        edge = ", and more than you asked"
+    elif not yes and roll > 100 - (100 - t) // 5:
+        edge = ", and something worse is true"
+    elif yes and roll > t - 5:
+        edge = ", but with a catch"
+    elif not yes and roll <= t + 5:
+        edge = ", but there is a near miss"
+    print(f"{a.question}: {k} ({t}%), d100 {roll}: {'yes' if yes else 'no'}{edge}")
+    print("for facts the GM has not decided; a fact already written stays as written")
+
+
+CUT_ENDS = ("cliffhanger", "resolved", "pause", "decision")
+
+
+def cmd_cuts(a):
+    """Split-party cut plan JSON {pcs, knowledge_rule, cuts: [{group, tag, ends}]}."""
+    d = load_json(a.file)
+    pcs, cuts = d.get("pcs", []), d.get("cuts", [])
+    if not cuts:
+        die("no cuts")
+    errs, warns, off = [], [], {p: 0 for p in pcs}
+    worst = {p: 0 for p in pcs}
+    for i, c in enumerate(cuts, 1):
+        g = c.get("group", [])
+        if not c.get("tag"):
+            errs.append(f"cut {i}: no tag (where and when, so players follow the jump)")
+        if c.get("ends") not in CUT_ENDS:
+            errs.append(f"cut {i}: ends {c.get('ends')!r}, use {', '.join(CUT_ENDS)}")
+        for p in g:
+            if p not in off:
+                errs.append(f"cut {i}: {p} is not in pcs")
+        for p in pcs:
+            off[p] = 0 if p in g else off[p] + 1
+            worst[p] = max(worst[p], off[p])
+        print(f"cut {i} [{c.get('tag', '?')}]: {', '.join(g)} -> {c.get('ends')}")
+    for p, w in worst.items():
+        if w > a.max_off:
+            warns.append(f"{p} is off stage for {w} cuts in a row, want {a.max_off} or fewer")
+    if all(c.get("ends") == "cliffhanger" for c in cuts) and len(cuts) > 1:
+        warns.append("every cut ends on a cliffhanger; mix in a resolved or decision end so it does not wear out")
+    if not d.get("knowledge_rule"):
+        warns.append("no knowledge_rule: (what off-stage players may know and act on)")
+    report(errs, warns, f"{len(cuts)} cut(s), {len(pcs)} PC(s)")
+
+
+CONTEST_PRESETS = {"joust": {"rounds": 3, "die": 20, "unhorse": 10, "score": "passes won"},
+                   "archery": {"rounds": 3, "die": 10, "unhorse": None, "score": "ring points"}}
+CONTEST_HOOKS = ["the loser demands a rematch on harder terms", "the loser's patron wants to hire the winner",
+                 "the loser blames sabotage and names a suspect", "the loser owes a debt the bet did not cover",
+                 "the loser's friend picks a quarrel with the winner", "the loser offers a secret for a second chance"]
+
+
+def cmd_contest(a):
+    """Indirect contest: rounds of die + bonus each; the margin decides; the loser becomes a hook."""
+    import random
+    rng = random.Random(a.seed)
+    p = CONTEST_PRESETS.get(a.preset, {"rounds": a.rounds, "die": 20, "unhorse": None, "score": "rounds won"})
+    sa = sb = 0
+    for r in range(1, p["rounds"] + 1):
+        x, y = rng.randint(1, p["die"]) + a.a, rng.randint(1, p["die"]) + a.b
+        if a.preset == "archery":
+            sa, sb = sa + x, sb + y
+            print(f"end {r}: A {x}, B {y} (total A {sa}, B {sb})")
+            continue
+        sa += x > y
+        sb += y > x
+        print(f"round {r}: A {x}, B {y}" + ("" if x != y else " (tie)"))
+        if p["unhorse"] and abs(x - y) >= p["unhorse"]:
+            print(f"{'B' if x > y else 'A'} is unhorsed")
+            sa, sb = (1, 0) if x > y else (0, 1)
+            break
+    if sa == sb:
+        print(f"tie on {p['score']}: one more round decides")
+        return
+    lose = "B" if sa > sb else "A"
+    print(f"winner: {'A' if lose == 'B' else 'B'} ({p['score']} {max(sa, sb)} to {min(sa, sb)})")
+    print(f"hook: {lose}: {rng.choice(CONTEST_HOOKS)}")
+
+
+RETELL_BIAS = ["blames outsiders", "adds a monster", "moves it closer to home", "adds treasure",
+               "names a culprit", "reads it as an omen"]
+
+
+def rumor_retold(a):
+    import random
+    rng = random.Random(a.seed)
+    size = a.size
+    print(f"what happened: {a.event or 'the event'} (scale {size})")
+    for i in range(1, a.retold + 1):
+        size = math.ceil(size * 1.5)
+        print(f"retelling {i}: scale {size}, the teller {rng.choice(RETELL_BIAS)}")
+    print("hand players the last line; the first one is the truth")
+
+
+TPK_REPRIEVE = [("a stranger drags you out and nurses you", "you owe them a task you cannot refuse"),
+                ("you wake in a temple, healed", "the temple keeps your best item as the fee"),
+                ("a power answers your last breath", "it marks you; its foes can find you"),
+                ("you come to among the dead foe's captives", "you lost a week and the trail has gone cold"),
+                ("the enemy spares you to carry a message", "your name now stands for their victory"),
+                ("you return, but changed", "a scar, a lost memory or a lasting -1 the player picks")]
+
+
+def tpk_reprieve(a):
+    import random
+    back, price = random.Random(a.seed).choice(TPK_REPRIEVE)
+    print(f"reprieve: {back}")
+    print(f"price: {price}")
+    print("use it once per campaign at most; a free return makes death meaningless")
+
+
+LEAVE_OPTIONS = ["the PC slips away with an in-world reason (a message, an errand) and rejoins later",
+                 "the group runs the PC as a quiet helper, with the player's consent, making no big choices",
+                 "pause the scene for that PC: they stand in the background and take no harm",
+                 "end the session at the next natural stop if the PC is central to the scene"]
+
+
+def attendance_leaves(a):
+    print("a player leaving mid-session, best first:")
+    for i, o in enumerate(LEAVE_OPTIONS, 1):
+        print(f"  {i}. {o}")
+    if a.combat:
+        print("warn: in combat: finish the round, then move the PC out of reach; do not leave them standing for foes")
+    print("warn: do not kill, rob or split the loot of a PC whose player is away")
+
+
+READALOUD_CERTAIN = ("obviously", "clearly", "definitely", "certainly", "you realize", "you realise",
+                     "you know", "you decide", "you feel", "undoubtedly")
+
+
+def rooms_readaloud(rooms):
+    import re
+    warns = []
+    for r in rooms:
+        t = r.get("read_aloud") or ""
+        n = r.get("name", "?")
+        for m in re.findall(r"\b\d+\s*(?:feet|foot|ft|')", t):
+            warns.append(f"{n}: exact distance {m.strip()!r} in read-aloud; say about, a stone's throw, two spear lengths")
+        low = t.lower()
+        for w in READALOUD_CERTAIN:
+            if re.search(r"\b" + w + r"\b", low):
+                warns.append(f"{n}: {w!r} tells players what they think or know; describe what they see")
+    report([], warns, f"{sum(1 for r in rooms if r.get('read_aloud'))} read-aloud text(s)")
+
+
+def rooms_surrender(rooms):
+    errs, warns, occ = [], [], 0
+    for r in rooms:
+        if not (r.get("enemies") or r.get("occupants")):
+            continue
+        occ += 1
+        n = r.get("name", "?")
+        if not r.get("schedule"):
+            warns.append(f"{n}: occupied with no schedule: (where they are by time of day)")
+        if not (r.get("surrender") or r.get("flee")):
+            errs.append(f"{n}: occupied with no surrender: or flee: (when they give up or run, and where)")
+    report(errs, warns, f"{occ} occupied room(s)")
+
+
+def cmd_war(a):
+    """War plan JSON {cause, goals, stop, met}: lint; --peace rolls a weekly sue-for-peace check."""
+    import random
+    d = load_json(a.file)
+    errs, warns = [], []
+    for k, why in (("cause", "why it started"), ("goals", "what each side wants"), ("stop", "what ends it")):
+        if not d.get(k):
+            errs.append(f"no {k}: ({why})")
+    if isinstance(d.get("goals"), list) and len(d["goals"]) < 2:
+        warns.append("one goal; give each side its own")
+    if a.peace and not errs:
+        rng, met = random.Random(a.seed), len(d.get("met", []))
+        for w in range(1, a.weeks + 1):
+            t = min(90, 5 * w + 15 * met + 10 * d.get("losses", 0))
+            r = rng.randint(1, 100)
+            print(f"week {w}: sue for peace on {t}%, d100 {r}" + (": talks open" if r <= t else ""))
+            if r <= t:
+                break
+        else:
+            print(f"no talks in {a.weeks} week(s)")
+    report(errs, warns, "war plan")
+
+
+def siege_phases(d, seed):
+    import random
+    rng = random.Random(seed)
+    s = d.get("assault")
+    if not s or not s.get("attackers") or not s.get("defenders"):
+        die('--phases wants "assault": {"attackers": N, "defenders": N, "waves": N, "walls": true}')
+    at, de = s["attackers"], s["defenders"]
+    a0, d0, ma, md = at, de, 10, 10
+    wall = 2 if s.get("walls", True) else 1
+    for w in range(1, s.get("waves", 3) + 1):
+        dl = min(de, round(at * rng.randint(1, 6) / 20))
+        al = min(at, round(de * wall * rng.randint(1, 6) / 10))
+        at, de = at - al, de - dl
+        ma += (1 if dl > al else 0) - math.ceil(10 * al / a0)
+        md += (1 if al > dl else 0) - math.ceil(10 * dl / d0)
+        print(f"wave {w}: attackers lose {al} ({at} left, morale {ma}), defenders lose {dl} ({de} left, morale {md})")
+        if de <= 0:
+            return print("the walls fall: no defenders left")
+        if md <= 0:
+            return print("the defenders surrender")
+        if ma <= 0 or at * 4 < a0:
+            return print("the assault is called off")
+    print("the waves are spent; the siege goes on")
+
+
+def morale_recover(a):
+    pen, day = a.recover, a.day
+    print(f"day {day}: {-pen:+d}")
+    while pen > 0:
+        pen -= 1
+        day += 1
+        print(f"day {day}: {-pen:+d}")
+    print(f"back to base on day {day}")
+
+
+HOLIDAY_KINDS = [("religious", 4), ("farming", 3), ("political", 2), ("private", 1)]
+HOLIDAY_SEEDS = {"religious": ["a fast day", "a saint's procession", "the night of lamps"],
+                 "farming": ["first sowing", "the harvest home", "the shearing fair"],
+                 "political": ["the founding day", "a victory feast", "the lord's birthday"],
+                 "private": ["a guild's feast", "a great family's wedding", "a temple's own rite"]}
+
+
+def calendar_holidays(a):
+    import random
+    rng = random.Random(a.seed)
+    n = 0
+    for m in range(1, a.months + 1):
+        if rng.random() < 0.5:
+            k = rng.choices([k for k, _ in HOLIDAY_KINDS], [w for _, w in HOLIDAY_KINDS])[0]
+            n += 1
+            print(f"month {m}, day {rng.randint(1, 28)}: {k}: {rng.choice(HOLIDAY_SEEDS[k])}")
+    print(f"{n} holiday(s) in {a.months} month(s); about one every two months")
+
+
+ORG_KEYS = (("delivers", "what it gives its members or clients"), ("resources", "money, people, places"),
+            ("structure", "hierarchy or network"), ("edge", "why rivals cannot copy it"),
+            ("change", "its plan when things change"), ("conformity", "how much members must fit in"))
+
+
+def villain_org(sec):
+    errs, warns = [], []
+    for name, lines in sec.items():
+        b = [l[2:].strip() for l in lines if l[:2] in ("- ", "* ")]
+        key = lambda k: [x.split(":", 1)[1].strip() for x in b if x.lower().startswith(k + ":")]
+        for k, why in ORG_KEYS:
+            if not key(k):
+                errs.append(f"{name}: no {k}: ({why})")
+        st = (key("structure") or [""])[0].lower()
+        if st and st not in ("hierarchy", "network"):
+            errs.append(f"{name}: structure {st!r}, use hierarchy or network")
+        if st == "hierarchy" and not key("procedure"):
+            warns.append(f"{name}: a hierarchy with no procedure: lines (how orders, pay and punishment move)")
+        if len(key("audience")) < 3:
+            warns.append(f"{name}: {len(key('audience'))} audience: lines, want 3+ (who it shows a face to)")
+        for c in key("committee"):
+            try:
+                n = int(c)
+            except ValueError:
+                die(f"{name}: committee wants a member count, got {c!r}")
+            print(f"{name}: a committee of {n} takes {n}d6 days to decide (about {n * 3.5:g})")
+    report(errs, warns, f"{len(sec)} organisation(s)")
+
+
+INTERVIEW_KEYS = ("occupation", "success", "if_fails", "obstacle", "trust", "leisure", "home")
+
+
+def villain_interview(name, key, errs, warns):
+    for k in INTERVIEW_KEYS:
+        if not key(k):
+            warns.append(f"{name}: interview has no {k}:")
+    for k, why in (("twist", "one trait that contradicts the rest"), ("excess", "one trait taken too far")):
+        if len(key(k)) != 1:
+            warns.append(f"{name}: want exactly one {k}: ({why}), found {len(key(k))}")
+    for w in key("weakness"):
+        if "from:" not in w.lower():
+            warns.append(f"{name}: weakness {w!r} does not say from: which low score it comes")
+
+
+def villain_key(name, key, errs):
+    keys, lairs = key("key"), [x.lower() for x in key("lair")]
+    if not keys:
+        errs.append(f"{name}: no key: (the tool that exploits the weakness, with kept: where)")
+    for k in keys:
+        kept = k.lower().split("kept:", 1)[1].strip() if "kept:" in k.lower() else ""
+        if not kept:
+            errs.append(f"{name}: key {k!r} has no kept: place")
+        elif "lair" in kept or any(l and l in kept for l in lairs):
+            errs.append(f"{name}: key kept in the villain's lair ({kept}); put it where the party can reach it first")
+
+
+MATRICES = ("linear", "space", "time", "power")
+
+
+def adventure_matrix(a):
+    d = load_json(a.file)
+    ev, sc = d.get("events", []), d.get("scenes", [])
+    errs, warns = [], []
+    for e in ev:
+        n = e.get("name", "?")
+        if a.matrix == "time" and e.get("date") is None:
+            errs.append(f"event {n}: no date (a time matrix runs on a clock)")
+        if a.matrix == "space" and not e.get("where"):
+            errs.append(f"event {n}: no where (a space matrix is a map of places)")
+        if len(e.get("readings", [])) >= 3:
+            warns.append(f"event {n}: {len(e['readings'])} readings; players will stall, cut it to two")
+    if a.matrix == "power":
+        early = sc[:max(1, math.ceil(len(sc) / 3))]
+        if not any(s.get("villain") for s in early):
+            warns.append("power matrix with no villain scene in the first third; let players meet the villain early")
+    if a.matrix == "linear" and any(s.get("branch") for s in sc):
+        warns.append("linear matrix with branch: scenes; call it space or time")
+    report(errs, warns, f"{a.matrix} matrix, {len(ev)} event(s), {len(sc)} scene(s)")
+
+
+EPIC_ROLES = ("observer", "controller")
+
+
+def campaign_epic(c):
+    e = c.get("epic")
+    if not e:
+        die('--epic wants "epic": {pcs, jobs, goals, judge}')
+    errs, warns = [], []
+    for p in e.get("pcs", []):
+        n = p.get("name", "?")
+        if not p.get("identity"):
+            errs.append(f"{n}: no identity (the local life they borrow)")
+        if p.get("cover_risk") is None:
+            warns.append(f"{n}: no cover_risk (what exposes them)")
+    for i, j in enumerate(e.get("jobs", [])):
+        n = j.get("name", f"job {i + 1}")
+        if j.get("role") not in EPIC_ROLES:
+            errs.append(f"{n}: role {j.get('role')!r}, use observer or controller")
+        if i == 0 and not j.get("superior_hidden"):
+            warns.append(f"{n}: the first job shows its superior; keep them hidden early (superior_hidden: true)")
+    g = e.get("goals", [])
+    if len(g) < 2:
+        warns.append(f"{len(g)} goal(s); give a ranked ladder of 2+ from near to far")
+    if not e.get("judge"):
+        errs.append("no judge: (who decides whether the epic PCs did well)")
+    report(errs, warns, f"epic: {len(e.get('pcs', []))} PC(s), {len(e.get('jobs', []))} job(s)")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -10344,6 +10757,9 @@ def main(argv=None):
     s.add_argument("card"); s.add_argument("--escapes", action="store_true", help="warn when an escape method repeats")
     s.add_argument("--clues", help="clues JSON [{points_to, reveals}]: counts clues pointing at each villain")
     s.add_argument("--scheme", action="store_true", help="motive, side_goal, 3+ step: with interrupt:, if_wins:, 2+ stop:")
+    s.add_argument("--org", action="store_true", help="organisation cards: delivers, resources, structure, edge, change, conformity, 3+ audience")
+    s.add_argument("--interview", action="store_true", help="occupation, success, if_fails, obstacle, trust, leisure, home, twist, excess")
+    s.add_argument("--key", action="store_true", help="key: the tool that beats the weakness, kept: outside the lair")
     s.set_defaults(fn=cmd_villain)
     s = sub.add_parser("twist", help="check a set of planned twists")
     s.add_argument("twists"); s.add_argument("--prophecy", action="store_true", help="the file is prophecies: if/when, goal, symbols")
@@ -10351,6 +10767,7 @@ def main(argv=None):
     s = sub.add_parser("campaign", help="check a campaign plan")
     s.add_argument("plan"); s.add_argument("--signs", type=int, default=3, help="foreshadowing signs wanted per climax")
     s.add_argument("--pacing", action="store_true", help="sessions: advances, a stake raise, side share, hooks, warnings")
+    s.add_argument("--epic", action="store_true", help="epic PCs: borrowed identity, observer or controller jobs, goals, judge")
     s.set_defaults(fn=cmd_campaign)
     s = sub.add_parser("hooks", help="check a city hook deck")
     s.add_argument("deck"); s.set_defaults(fn=cmd_hooks)
@@ -10375,6 +10792,9 @@ def main(argv=None):
     s.add_argument("--mod", type=int, action="append")
     s.add_argument("--approach", choices=["friendly", "neutral", "hostile"], default="neutral")
     s.add_argument("--rank-gap", type=int, help="PC rank minus NPC rank")
+    s.add_argument("--asked", type=int, help="times the party already asked this NPC for this")
+    s.add_argument("--best-case", choices=REACTION_ORDER, help="this NPC never reacts better than this")
+    s.add_argument("--worst-case", choices=REACTION_ORDER, help="this NPC never reacts worse than this")
     s.add_argument("--roll", type=int); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_reaction)
     s = sub.add_parser("heat", help="faction standing and heat ledger")
     s.add_argument("action", choices=["show", "crime", "standing", "cool", "told"]); s.add_argument("faction", nargs="?")
@@ -10474,7 +10894,9 @@ def main(argv=None):
     s = sub.add_parser("handouts", help="check handouts: purpose, in-world sender, a recap after a gap")
     s.add_argument("file"); s.set_defaults(fn=cmd_handouts)
     s = sub.add_parser("calendar", help="world-day ledger for split groups")
-    s.add_argument("file"); s.add_argument("--drift", type=int, default=3, help="warn when groups are this many days apart")
+    s.add_argument("file", nargs="?"); s.add_argument("--drift", type=int, default=3, help="warn when groups are this many days apart")
+    s.add_argument("--holidays", action="store_true", help="roll holidays by kind, about one every two months")
+    s.add_argument("--months", type=int, default=12); s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_calendar)
     s = sub.add_parser("hirelings", help="hireling loyalty and loyalty checks")
     s.add_argument("file"); s.add_argument("--roll", help="hireling to check"); s.add_argument("--event")
@@ -10502,7 +10924,9 @@ def main(argv=None):
     s.add_argument("--tally", help="tally mode: PC:sfs,... one s or f per fixed round; net +-2 bands")
     s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_chase)
     s = sub.add_parser("attendance", help="who came and what to do with absent PCs")
-    s.add_argument("roster"); s.add_argument("--present", type=int, required=True)
+    s.add_argument("roster"); s.add_argument("--present", type=int)
+    s.add_argument("--leaves", action="store_true", help="a player leaves mid-session: ranked options")
+    s.add_argument("--combat", action="store_true", help="--leaves: it happens during a fight")
     s.add_argument("--dynamic", choices=list(ABSENT_PCS), default="collective")
     s.add_argument("--roles", action="store_true", help="rules marshal plus table jobs, rotating by --session")
     s.add_argument("--session", type=int, default=1)
@@ -10511,6 +10935,7 @@ def main(argv=None):
     s.add_argument("file"); s.add_argument("--full", action="store_true", help="also want avoid, reset and alarm")
     s.add_argument("--reset", action="store_true", help="a trap with guards: PUZZLE needs reset and retry")
     s.add_argument("--complex", action="store_true", help="round clock per trap (complex {per_round, harm_at, ...})")
+    s.add_argument("--rooms", type=int, help="rooms in the site: warn when traps pass about 1 in 4")
     s.set_defaults(fn=cmd_trap)
     s = sub.add_parser("downtime", help="check downtime activities: time, cost or sink, outcomes")
     s.add_argument("file", nargs="?"); s.add_argument("--preset", choices=sorted(DOWNTIME_PRESETS))
@@ -10529,6 +10954,8 @@ def main(argv=None):
     s.add_argument("--keep-pcs", action="store_true", help="the players want their characters back")
     s.add_argument("--capture", metavar="ROOM", help="the party is captured, not killed: where they wake")
     s.add_argument("--taken", action="append", help="with --capture: an item the captors took; repeat")
+    s.add_argument("--reprieve", action="store_true", help="a cheat-death return paired with its price")
+    s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_tpk)
     s = sub.add_parser("alert", help="dungeon alert track")
     s.add_argument("action", choices=["init", "raise", "lower", "show", "noise", "waves"])
@@ -10610,6 +11037,8 @@ def main(argv=None):
     s.add_argument("--leader-cumulative", type=int, metavar="N", help="after the leader falls, flee chance +N%% a round")
     s.add_argument("--outnumbered", type=float, metavar="RATIO", help="break with no roll when foes reach RATIO x allies")
     s.add_argument("--allies", type=int); s.add_argument("--foes", type=int)
+    s.add_argument("--recover", type=int, metavar="N", help="a morale penalty of N: one point back a day")
+    s.add_argument("--day", type=int, default=0, help="--recover: today's day number")
     s.add_argument("--seed", type=int); s.add_argument("--roll", type=int); s.set_defaults(fn=cmd_morale)
     s = sub.add_parser("awards", help="check per-player awards, milestones and coins in session logs")
     s.add_argument("logs", nargs="+"); s.set_defaults(fn=cmd_awards)
@@ -10621,6 +11050,8 @@ def main(argv=None):
     s.add_argument("--muffle", action="store_true", help="which rooms hear a noise: true room; muffled rooms damp it")
     s.add_argument("--teleport", action="store_true", help="teleport tables: every result reaches an exit; a bypass")
     s.add_argument("--hooks", action="store_true", help="hooks gated by a check need later: how they resolve")
+    s.add_argument("--surrender", action="store_true", help="occupied rooms need schedule: and surrender: or flee:")
+    s.add_argument("--readaloud", action="store_true", help="lint read_aloud: exact feet, words that tell players what they think")
     s.add_argument("--shift", action="store_true", help="day and night occupants per room; rank-gated stairs need a guard")
     s.add_argument("--skip", help="a shortcut door: rooms and awards cut off when it opens first")
     s.add_argument("--rally", help="a foe: fleeing foes join their finale force; min and max")
@@ -10673,7 +11104,8 @@ def main(argv=None):
     s = sub.add_parser("supply", help="army weekly supply cost and line, or --forage levy|loot")
     s.add_argument("file"); s.add_argument("--forage", choices=["levy", "loot"]); s.set_defaults(fn=cmd_supply)
     s = sub.add_parser("siege", help="siege capacity, blockade, breaches, days to fall")
-    s.add_argument("file"); s.set_defaults(fn=cmd_siege)
+    s.add_argument("file"); s.add_argument("--phases", action="store_true", help="assault waves: losses, morale, end")
+    s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_siege)
     s = sub.add_parser("upkeep", help="weekly campaign tick: treasury against supply and wages")
     s.add_argument("file"); s.add_argument("--weeks", type=int, default=1); s.set_defaults(fn=cmd_upkeep)
     s = sub.add_parser("forage", help="forage herbs on a terrain table, or --check the table")
@@ -10787,6 +11219,8 @@ def main(argv=None):
     s.add_argument("--truth", action="store_true", help="true rumours a small minority, some partial")
     s.add_argument("--max-true", type=float, default=RUMOR_TRUE_MAX, help="--truth: highest share of true rumours")
     s.add_argument("--venue", choices=list(RUMOR_VENUE), help="rumours heard per hour at this venue")
+    s.add_argument("--retold", type=int, help="retellings: the scale grows and each teller adds a bias")
+    s.add_argument("--event", help="--retold: what really happened"); s.add_argument("--size", type=int, default=4)
     s.add_argument("--hours", type=float, default=1); s.add_argument("--seed", type=int)
     s = sub.add_parser("triggers", help="check IF/THEN triggers: bound or unbound, a visible result each")
     s.add_argument("file"); s.set_defaults(fn=cmd_triggers)
@@ -10847,6 +11281,7 @@ def main(argv=None):
     s.add_argument("--hook", action="store_true", help="patron selfish motive, a non-combat route, a pc_slot")
     s.add_argument("--day", action="store_true", help="fight load per day between long rests; three hard in a row")
     s.add_argument("--cap", type=float, default=DAY_CAP, help="--day: load a party can take (ours)")
+    s.add_argument("--matrix", choices=MATRICES, help="events and scenes against a plot matrix")
     s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_adventure)
     s = sub.add_parser("mastery", help="mastery marks per school: 4 from one trigger kind, the 4th halves the cost")
@@ -11005,6 +11440,21 @@ def main(argv=None):
     s.add_argument("--start"); s.add_argument("--months", type=int, default=6)
     s.add_argument("--quarantine", action="store_true"); s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_plague)
+    s = sub.add_parser("odds", help="yes/no fact oracle with GM-set odds")
+    s.add_argument("question"); g = s.add_mutually_exclusive_group()
+    g.add_argument("--likely", action="store_true"); g.add_argument("--even", action="store_true")
+    g.add_argument("--unlikely", action="store_true")
+    s.add_argument("--roll", type=int); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_odds)
+    s = sub.add_parser("cuts", help="split-party cut plan: tags, off-stage streaks, cliffhangers, knowledge rule")
+    s.add_argument("file"); s.add_argument("--max-off", type=int, default=2, help="cuts a PC may sit out in a row")
+    s.set_defaults(fn=cmd_cuts)
+    s = sub.add_parser("contest", help="indirect contest between two sides; the loser becomes a hook")
+    s.add_argument("--a", type=int, default=0); s.add_argument("--b", type=int, default=0)
+    s.add_argument("--preset", choices=list(CONTEST_PRESETS)); s.add_argument("--rounds", type=int, default=3)
+    s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_contest)
+    s = sub.add_parser("war", help="war plan lint: cause, goals, stop; --peace weekly sue-for-peace check")
+    s.add_argument("file"); s.add_argument("--peace", action="store_true"); s.add_argument("--weeks", type=int, default=8)
+    s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_war)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
