@@ -45,6 +45,8 @@ Commands:
   resize      add or cut foes for a different party size
   target      pick a monster's target (marked, threat, reach, roll)
   playtest    check a blind playtest log
+  mastery     mastery marks per school (4 from one trigger kind, 4th halves the cost)
+  ties        PC bonds and plot ties used across session logs
   licence     notices for the bundled rules tables
 
 Exit 2 is a usage or validation error.
@@ -908,6 +910,11 @@ def cmd_prep(a):
         if "ends:" not in l.lower():
             warns.append(f"false lead with no ending (add 'ends: how players learn it is a dead end'): {l}")
     prep_rotation_purpose(fights, a, errs, warns)
+    if a.cues:
+        cued = [l for l in leads if "cue:" in l.lower()]
+        if len(cued) < a.cues:
+            errs.append(f"{len(cued)} lead(s) with a cue:, want {a.cues}+ (the line or sight that puts the lead "
+                        "in front of the players)")
     if a.end:
         prep_climax_time(a.end, a.climax_min)
     for w in warns:
@@ -1864,6 +1871,8 @@ def cmd_table(a):
         return table_check(a)
     if a.table == "lint":
         return table_lint(a)
+    if a.band:
+        return table_band(a)
     if a.tables:
         die("table takes one file (or: table combine A.csv B.csv ...)")
     rows, covered, errs = read_table(a.table)
@@ -1960,6 +1969,9 @@ def cmd_item(a):
                     warns.append(f"{n}: breaks_after with no save; say what roll counts as a failure")
             if it.get("bypasses") and not it.get("friction"):
                 errs.append(f"{n}: bypasses {', '.join(it['bypasses'])} with no friction; it erases that part of the game")
+        if it.get("consumable") and not it.get("roll") and not it.get("made_by"):
+            warns.append(f"{n}: consumable that works with no roll and no made_by; name who makes more and what that "
+                         "costs, or the supply has no limit")
     for w in warns:
         print("warn: " + w)
     for e in errs:
@@ -1967,6 +1979,107 @@ def cmd_item(a):
     if errs:
         sys.exit(1)
     print("ok: every boon has a matching drawback")
+
+
+SEVERITY_WORDS = ("none", "minor", "moderate", "major", "severe", "catastrophic")
+
+
+def table_band(a):
+    """Mishap bands CSV (power,severity): as power rises the worst result must not get milder."""
+    with open(a.table, encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+    if not rows:
+        die("no rows")
+    out = []
+    for r in rows:
+        try:
+            pw = float(r["power"])
+        except (KeyError, TypeError, ValueError):
+            die(f"bad power {r.get('power')!r}: use a number (spell level, tier, dice pushed)")
+        sv = (r.get("severity") or "").strip().lower()
+        if sv in SEVERITY_WORDS:
+            sv_n = SEVERITY_WORDS.index(sv)
+        else:
+            try:
+                sv_n = float(sv)
+            except ValueError:
+                die(f"bad severity {sv!r}: a number or one of {', '.join(SEVERITY_WORDS)}")
+        out.append((pw, sv_n, sv))
+    out.sort(key=lambda x: x[0])
+    errs = []
+    for (p0, s0, w0), (p1, s1, w1) in zip(out, out[1:]):
+        if s1 < s0:
+            errs.append(f"power {p1:g} mishap ({w1}) is milder than power {p0:g} ({w0}); bigger magic must risk as much or more")
+    report(errs, [], f"{len(out)} band(s), severity never drops as power rises")
+
+
+MASTERY_MARKS = 4
+
+
+def cmd_mastery(a):
+    """Mastery ledger JSON {school: {trigger, marks: [why...]}}: marks come from the school's trigger kind,
+    four at most; the fourth halves the cost (rounded up). Our own ladder."""
+    path = Path(a.file)
+    led = load_json(path) if path.exists() else {}
+    if a.school:
+        e = led.get(a.school)
+        if e is None:
+            if not a.trigger:
+                die(f"new school {a.school}: give --trigger (the kind of deed that earns a mark)")
+            e = led[a.school] = {"trigger": a.trigger, "marks": []}
+        elif a.trigger and a.trigger != e["trigger"]:
+            die(f"{a.school} marks come from {e['trigger']!r}, not {a.trigger!r}")
+        if a.mark:
+            if len(e["marks"]) >= MASTERY_MARKS:
+                die(f"{a.school} already has {MASTERY_MARKS} marks: mastered")
+            e["marks"].append(a.mark)
+        path.write_bytes((json.dumps(led, indent=2) + "\n").encode("utf-8"))
+    for name, e in led.items():
+        m = len(e.get("marks", []))
+        line = f"{name}: {m}/{MASTERY_MARKS} marks ({e.get('trigger', '?')})"
+        if m >= MASTERY_MARKS:
+            line += "; mastered: half cost"
+            if a.cost:
+                line += f", {a.cost} -> {-(-a.cost // 2)}"
+        print(line)
+
+
+def cmd_ties(a):
+    """Bond use across session logs: 'tie: A-B' lines (PC to PC) and 'plot_tie: A' lines, against party JSON ties."""
+    d = load_json(a.party)
+    pcs = d.get("pcs", [])
+    pairs = {}
+    for p in pcs:
+        for t in p.get("ties", []):
+            pairs.setdefault(frozenset((p.get("name"), t)), [])
+    plots = {p.get("name"): [] for p in pcs if p.get("plot_tie")}
+    if not pairs and not plots:
+        die("party has no ties or plot_tie")
+    warns = []
+    for i, f in enumerate(a.logs):
+        for line in Path(f).read_text(encoding="utf-8").splitlines():
+            k, _, v = line.lstrip("-* ").partition(":")
+            k, v = k.strip().lower(), v.strip()
+            if k == "tie" and v:
+                ab = frozenset(x.strip() for x in v.replace("/", "-").split("-", 1))
+                if ab in pairs:
+                    pairs[ab].append(i)
+                else:
+                    warns.append(f"{f}: tie {v!r} is not a bond in the party file")
+            elif k == "plot_tie" and v:
+                if v in plots:
+                    plots[v].append(i)
+                else:
+                    warns.append(f"{f}: plot_tie {v!r} is not a PC with a plot_tie")
+    n = len(a.logs)
+    rows = [("-".join(sorted(x)), u) for x, u in pairs.items()] + [(f"{k} (plot)", u) for k, u in plots.items()]
+    for label, used in rows:
+        print(f"{label}: used in {len(set(used))} of {n} session(s)")
+        if not used:
+            warns.append(f"{label}: never used; give it a scene")
+        elif n - 1 - max(used) >= a.stale:
+            warns.append(f"{label}: unused for the last {n - 1 - max(used)} session(s)")
+    report([], warns, f"{len(pairs)} bond(s), {len(plots)} plot tie(s) over {n} session(s)")
 
 
 # 0.9.0: table-running helpers. Bands, steps and odds are ours and configurable.
@@ -2789,6 +2902,23 @@ def cmd_oneshot(a):
     for r, ns in roles.items():
         if len(ns) > 1:
             warns.append(f"{' and '.join(ns)} share the role {r}; give each pregen its own job")
+    enc = c.get("encounters")
+    if enc is not None:
+        k = len(enc)
+        if not 2 <= k <= 4:
+            warns.append(f"{k} encounter(s); one sitting holds about three")
+        tw = [i for i, e in enumerate(enc) if e.get("twist")]
+        fin = [i for i, e in enumerate(enc) if e.get("finale")]
+        if not tw:
+            warns.append("no encounter with twist: true; turn the night around somewhere in the middle")
+        for i in tw:
+            if i in (0, k - 1):
+                warns.append(f"twist in {enc[i].get('name', i + 1)}, the {'first' if i == 0 else 'last'} encounter; "
+                             "put it between the opening and the finale")
+        if not fin:
+            warns.append("no encounter with finale: true")
+        elif fin != [k - 1]:
+            warns.append("the finale is not the last encounter; nothing should follow it")
     report(errs, warns, f"{len(pre)} pregen(s), bond {bond or '?'}, finish set")
 
 
@@ -6019,6 +6149,7 @@ def main(argv=None):
     s.add_argument("--purpose", action="store_true", help="every fight needs purpose: (show-villain, warning, ...)")
     s.add_argument("--end", help="HH:MM the session ends; prints when the climax must start")
     s.add_argument("--climax-min", type=int, default=45, help="minutes the final scene needs")
+    s.add_argument("--cues", type=int, nargs="?", const=3, help="leads with a cue: line needed (default 3)")
     s.set_defaults(fn=cmd_prep)
     s = sub.add_parser("combat-log", help="turn times of a real fight from a CSV log")
     s.add_argument("log"); s.add_argument("--budget", type=float, default=90); s.add_argument("--gm", default="GM")
@@ -6045,6 +6176,7 @@ def main(argv=None):
     s.add_argument("--seed", type=int); s.add_argument("--count", type=int, default=6)
     s.add_argument("--dice", help="table check: the dice rolled on it, e.g. 2d10 or d100")
     s.add_argument("--filter", action="append", help="combine: keep rows where column key=value (blank or any always match)")
+    s.add_argument("--band", action="store_true", help="CSV power,severity: mishaps must not get milder as power rises")
     s.set_defaults(fn=cmd_table)
     s = sub.add_parser("mystery", help="check a mystery's clues and suspects")
     s.add_argument("file"); s.add_argument("--every-suspect", action="store_true",
@@ -6427,6 +6559,14 @@ def main(argv=None):
     s.add_argument("file"); s.add_argument("--pillars", action="store_true", help="print the count per pillar")
     s.add_argument("--pacing", choices=("pendulum", "pit", "vise"), help="check scene difficulty: against a shape")
     s.set_defaults(fn=cmd_adventure)
+    s = sub.add_parser("mastery", help="mastery marks per school: 4 from one trigger kind, the 4th halves the cost")
+    s.add_argument("file"); s.add_argument("--school"); s.add_argument("--trigger", help="kind of deed that earns marks")
+    s.add_argument("--mark", help="add a mark: what earned it"); s.add_argument("--cost", type=int, help="cost to halve")
+    s.set_defaults(fn=cmd_mastery)
+    s = sub.add_parser("ties", help="PC bonds and plot ties used across session logs")
+    s.add_argument("party"); s.add_argument("logs", nargs="+")
+    s.add_argument("--stale", type=int, default=3, help="warn on a bond unused this many sessions")
+    s.set_defaults(fn=cmd_ties)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
