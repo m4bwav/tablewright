@@ -183,6 +183,7 @@ def cmd_encounter(a):
         res["notes"].append("over the Extreme budget")
     res["warnings"] = mission_warnings(a) + wave_warns + role_warnings(roles, len(a.foe)) + solo_horde_warnings(a)
     res["warnings"] += hearts_warnings(a, notes)
+    res["warnings"] += hazard_immune_warnings(a)
     if total > budgets[deadly] and not a.exit:
         res["warnings"].append(f"above {deadly.title()} with no --exit: name the way out (retreat, safe room, parley)")
     if roles:
@@ -529,6 +530,19 @@ def tick_clocks(d, unit):
 
 HEART = 10  # HP in one heart block
 HEART_CHIP = 1  # our number: hearts one PC knocks off a foe per round, on average
+
+
+def hazard_immune_warnings(a):
+    """A hazard whose damage type the boss is immune to hurts only the party."""
+    imm = {x.strip().lower() for x in (getattr(a, "immune", None) or [])}
+    out = []
+    for t in getattr(a, "hazard_type", None) or []:
+        if t.strip().lower() in imm:
+            out.append(f"hazard deals {t} and the boss is immune to {t}: the hazard only hurts the party; "
+                       "make that the point (lure them in) or change the type")
+    if getattr(a, "hazard_type", None) and not a.hazard:
+        out.append("--hazard-type with no --hazard")
+    return out
 
 
 def hearts_warnings(a, notes):
@@ -1270,7 +1284,8 @@ def cmd_sessionlog(a):
 
 
 NPC_DEPTH = ("ideal", "bond", "flaw")
-NPC_EXTRA = ("major", "secret", "joins_party", "exit", "tactics", "but", "roles", "tell", "revealed")
+NPC_EXTRA = ("major", "secret", "joins_party", "exit", "tactics", "but", "roles", "tell", "revealed",
+             "notice", "open", "goals")
 
 
 def cmd_npcs(a):
@@ -1298,6 +1313,20 @@ def cmd_npcs(a):
             print(f"warn: {name.strip()}: secret with no tell: (players cannot discover it)")
         if extra.get("secret") and not extra.get("revealed"):
             print(f"warn: {name.strip()}: secret with no revealed: (what changes when it comes out)")
+        for k in ("notice", "open"):
+            if extra.get(k) and not extra[k].isdigit():
+                errs.append(f"{name.strip()}: {k}: wants a DC number")
+        if extra.get("open") and not extra.get("notice"):
+            print(f"warn: {name.strip()}: open: gate with no notice: gate (players must first see there is a secret)")
+        if (extra.get("notice") or extra.get("open")) and not extra.get("secret"):
+            print(f"warn: {name.strip()}: secret gates with no secret:")
+        if extra.get("notice", "").isdigit() and extra.get("open", "").isdigit():
+            print(f"{name.strip()}: secret gates notice DC {extra['notice']}, then open DC {extra['open']}")
+        if getattr(a, "agenda", False):
+            goals = [x for x in extra.get("goals", "").split("|") if x.strip()]
+            if len(goals) < 2 or not extra.get("tell"):
+                print(f"warn: {name.strip()}: agenda wants 2+ goals: (a | b) and a tell: (got {len(goals)} goals"
+                      + (", no tell)" if not extra.get("tell") else ")"))
         roles = [x for x in extra.get("roles", "").replace("|", ",").split(",") if x.strip()]
         if extra.get("major", "").lower() in ("true", "yes") and len(roles) < 2:
             print(f"warn: {name.strip()}: major NPC with {len(roles)} roles:, give 2+ so they stay useful (e.g. roles: fence, informant)")
@@ -1315,11 +1344,62 @@ def cmd_npcs(a):
 
 
 FIVE = ["entrance", "puzzle", "setback", "climax", "reward"]
+NINE_PATHS = 3  # our floor: distinct start-to-end routes for the chart to offer a real choice
+
+
+def fiveroom_nine(plan):
+    """Nine-node story chart {shape: nine, nodes: [{id, links, end}]}: the first node starts, one node ends;
+    every node reachable, the end reachable from each, and 3+ distinct routes through."""
+    nodes = plan.get("nodes") or []
+    errs, warns = [], []
+    if len(nodes) != 9:
+        errs.append(f"{len(nodes)} nodes, the nine-node chart wants 9")
+    ids = [str(n.get("id")) for n in nodes]
+    links = {str(n.get("id")): [str(x) for x in n.get("links") or []] for n in nodes}
+    for i, ls in links.items():
+        for x in ls:
+            if x not in links:
+                errs.append(f"node {i}: link to unknown node {x}")
+    ends = [str(n.get("id")) for n in nodes if n.get("end")]
+    if len(ends) != 1:
+        errs.append(f"{len(ends)} end nodes, want exactly 1 (end: true)")
+    if errs:
+        return report(errs, warns, "")
+    start, end = ids[0], ends[0]
+
+    def reach(frm):
+        seen, todo = {frm}, [frm]
+        while todo:
+            for x in links[todo.pop()]:
+                if x not in seen:
+                    seen.add(x)
+                    todo.append(x)
+        return seen
+    seen = reach(start)
+    for i in ids:
+        if i not in seen:
+            errs.append(f"node {i}: cannot be reached from the start ({start})")
+        elif i != end and end not in reach(i):
+            warns.append(f"node {i}: dead end, the end cannot be reached from it")
+    if links[end]:
+        warns.append(f"end node {end} links onward; the chart should close there")
+
+    def routes(at, path):
+        if at == end:
+            return 1
+        return sum(routes(x, path | {x}) for x in links[at] if x not in path)
+    n = routes(start, {start})
+    print(f"{n} route(s) from {start} to {end}")
+    if n < NINE_PATHS:
+        warns.append(f"{n} route(s) through; {NINE_PATHS}+ gives the players a real choice (our floor)")
+    report(errs, warns, f"nine nodes, start {start}, end {end}")
 
 
 def cmd_fiveroom(a):
     """Check an adventure plan against the five-role arc (entrance, puzzle, setback, climax, reward)."""
     plan = json.loads(Path(a.plan).read_text(encoding="utf-8"))
+    if plan.get("shape") == "nine":
+        return fiveroom_nine(plan)
     areas, party = plan.get("areas", []), plan.get("party")
     errs, warns = [], []
     roles = [x.get("role") for x in areas]
@@ -2311,17 +2391,32 @@ def cmd_wander(a):
         die("--chance and --every must be positive")
     warns = []
     checks = int(a.hours * 60 // a.every)
-    expected = checks / a.chance
-    print(f"{checks} checks at 1 in {a.chance}: about {expected:.1f} encounters in {a.hours:g} h")
+    if a.night_chance is not None and a.night_chance < 1:
+        die("--night-chance must be positive")
+    night = min(checks, int(a.night_hours * 60 // a.every)) if a.night_chance else 0
+    expected = (checks - night) / a.chance + (night / a.night_chance if night else 0)
+    if night:
+        print(f"{checks - night} day checks at 1 in {a.chance}, {night} night checks at 1 in {a.night_chance}:"
+              f" about {expected:.1f} encounters in {a.hours:g} h")
+    else:
+        print(f"{checks} checks at 1 in {a.chance}: about {expected:.1f} encounters in {a.hours:g} h")
+    if a.bump:
+        print(f"bump: a fight makes noise; the next check is 1 in {max(1, a.chance - a.bump)}")
     if expected > a.budget:
         warns.append(f"about {expected:.1f} encounters, over the budget of {a.budget:g}; check less often or lower the chance")
     if a.placed:
         warns.append(f"placed population in {', '.join(a.placed)}: use it there instead of rolling")
     if a.run:
         rng = random.Random(a.seed)
+        loud = False
         for i in range(1, checks + 1):
-            if rng.randint(1, a.chance) != 1:
+            odds = a.night_chance if i > checks - night else a.chance
+            if loud:
+                odds = max(1, odds - a.bump)
+            loud = False
+            if rng.randint(1, odds) != 1:
                 continue
+            loud = bool(a.bump)
             dist = (rng.randint(1, 6) + rng.randint(1, 6)) * a.feet
             us = rng.randint(1, a.surprise) == 1
             them = rng.randint(1, a.surprise) == 1
@@ -2347,6 +2442,8 @@ def cmd_battle(a):
     """Mass battle JSON: exactly three fights the PCs play, each with a shape and what a win carries forward."""
     if a.resolve:
         return battle_resolve(a)
+    if a.strength:
+        return battle_strength(a)
     d = json.loads(Path(a.plan).read_text(encoding="utf-8"))
     fights = d.get("fights", [])
     errs, warns = [], []
@@ -3650,9 +3747,11 @@ def cmd_awards(a):
             k, _, v = ln.strip().lstrip("-* ").partition(":")
             k = k.strip().lower()
             if k == "award":
-                f = [x.strip() for x in v.split("|")] + [""] * 5
-                pl, kind, ab, reason, xp = f[:5]
+                f = [x.strip() for x in v.split("|")] + [""] * 6
+                pl, kind, ab, reason, xp, cancel = f[:6]
                 players.add(pl)
+                if kind.lower() == "penalty" and not cancel:
+                    warns.append(f"{path}: penalty to {pl} with no cancelled_by (6th field: what the player can do to clear it)")
                 if not reason:
                     errs.append(f"{path}: award to {pl} has no reason")
                 if ab:
@@ -4296,6 +4395,38 @@ def cmd_command(a):
     report(errs, warns, f"{len(divs)} division(s)")
 
 
+BATTLE_EVEN, BATTLE_LOPSIDED = 1.25, 2.0  # our bands for the strength ratio
+
+
+def battle_strength(a):
+    """Strength per side: sum of each unit's hp x attacks x hit chance against the other side's mean AC
+    (staying power times output). Our own score, no book numbers."""
+    sides = load_json(a.plan).get("sides") or []
+    if len(sides) != 2:
+        die("--strength wants sides: [two armies of units]")
+    score = []
+    for i in (0, 1):
+        foe = sides[1 - i].get("units") or []
+        ac = sum(u.get("ac", 10) for u in foe) / max(1, len(foe))
+        t = 0.0
+        for u in sides[i].get("units") or []:
+            need = max(2, min(20, math.ceil(ac - u.get("to_hit", 0))))
+            t += u.get("hp", 1) * u.get("attacks", 1) * (21 - need) / 20
+        score.append(t)
+    names = [s.get("name", "AB"[i]) for i, s in enumerate(sides)]
+    for n, t in zip(names, score):
+        print(f"{n}: strength {t:.1f}")
+    lo, hi = sorted(score)
+    ratio = hi / lo if lo else float("inf")
+    strong = names[score.index(hi)]
+    warns = []
+    if ratio >= BATTLE_LOPSIDED:
+        warns.append(f"{strong} is {ratio:.1f}x stronger; a foregone battle unless the PCs' fights or terrain change it")
+    elif ratio > BATTLE_EVEN:
+        print(f"{strong} has the edge ({ratio:.2f}x)")
+    report([], warns, f"ratio {ratio:.2f}" + (" (even)" if ratio <= BATTLE_EVEN else ""))
+
+
 def battle_resolve(a):
     """Expected hits each round per side, run until one side loses a third of its units, then pursuit throws."""
     import random
@@ -4624,6 +4755,10 @@ def cr_value(cr):
 
 def cmd_template(a):
     """Apply a template to a 5e CR: step along the ladder (0, 1/8, 1/4, 1/2, 1, 2...) or scale and round up."""
+    if a.adjust:
+        return template_pf2e(a)
+    if a.cr is None:
+        die("give --cr (5e) or --adjust elite|weak --level N (pf2e/sf2e)")
     cr = {"0.125": "1/8", "0.25": "1/4", "0.5": "1/2"}.get(a.cr, a.cr)
     if cr not in CR_XP:
         die(f"unknown challenge rating: {a.cr}")
@@ -4642,6 +4777,24 @@ def cmd_template(a):
     if len(a.template or []) > 1:
         print(f"warn: {len(a.template)} templates stacked ({', '.join(a.template)}); the math drifts, playtest it")
     print(f"CR {cr} ({CR_XP[cr]} XP) -> CR {new} ({CR_XP[new]} XP)")
+
+
+def template_pf2e(a):
+    """PF2e elite or weak: the creature counts one level up or down, two from the edge levels
+    (Pathfinder Monster Core, ORC; the same shift serves sf2e)."""
+    if a.level is None:
+        die("--adjust needs --level N (the creature's level)")
+    if a.adjust == "elite":
+        new = a.level + (2 if a.level <= 0 else 1)
+    else:
+        new = a.level - (2 if a.level == 1 else 1)
+    print(f"level {a.level} {a.adjust} -> counts as level {new} for XP")
+    if a.party_level is not None:
+        for lv in (a.level, new):
+            xp, note = foe_xp("pf2e", str(lv), a.party_level)
+            print(f"level {lv} against a level {a.party_level} party: " + (f"{xp} XP" if xp is not None else note))
+    if len(a.template or []) > 1:
+        print(f"warn: {len(a.template)} adjustments stacked; elite twice is not a rule, build a higher-level creature")
 
 
 POISON_FIELDS = ("delivery", "save", "interval", "onset", "stages")
@@ -5648,9 +5801,28 @@ def cmd_hazard(a):
         warns.append(f"{len(counters)} counters; a hazard round wants 2+ problems pulling the party apart")
     if not d.get("order"):
         warns.append("no order: say which counter goes up first each round")
+    party = getattr(a, "party", None)
     for c in counters:
         n = c.get("name", "?")
         start, cap, per = c.get("start", 0), c.get("cap"), c.get("per_round", 0)
+        for k in ("start_per_pc", "cap_per_pc"):
+            if c.get(k) is None:
+                continue
+            if not party:
+                errs.append(f"{n}: {k} needs --party N")
+            elif k == "start_per_pc":
+                start += c[k] * party
+            else:
+                cap = (cap or 0) + c[k] * party
+        if party and (c.get("start_per_pc") or c.get("cap_per_pc")):
+            print(f"{n}: start {start}, cap {cap} for {party} PCs")
+        nd, idd = c.get("notice_dc"), c.get("identify_dc")
+        if isinstance(nd, int) and isinstance(idd, int) and idd <= nd:
+            warns.append(f"{n}: identify_dc {idd} is not above notice_dc {nd}; knowing what it is should be harder than seeing it")
+        if c.get("banish") and not c.get("on_fail"):
+            warns.append(f"{n}: banish with no on_fail (what a failed banishing costs)")
+        if c.get("idle_until"):
+            print(f"{n}: idle until {c['idle_until']}, then rises")
         if not isinstance(cap, int):
             errs.append(f"{n}: no cap (the value at which it is lost)")
             continue
@@ -6202,6 +6374,11 @@ def cmd_adventure(a):
     if a.pillars:
         for p in ADVENTURE_PILLARS:
             print(f"{p}: {req.get(p, 0)} required, {opt.get(p, 0)} optional")
+    for s in scenes:
+        c = s.get("check")
+        if isinstance(c, dict) and c.get("success") and c.get("success") == c.get("fail"):
+            warns.append(f"{s.get('name', '?')}: both outcomes of the check lead to {c['success']}; "
+                         "a fake choice, give failure its own place or cost")
     tot = len(scenes)
     pillarless = a.pacing and not any(s.get("pillar") for s in scenes)
     for p in () if pillarless else ("combat", "social"):
@@ -6614,6 +6791,8 @@ def main(argv=None):
             s.add_argument("--buff-source", help="an object granting every foe advantage; prints the band with and without it")
             s.add_argument("--scale", help="SIZE:ADD,... foes of the first --foe added per party size, e.g. 3:0,6:1,8:2")
             s.add_argument("--trigger", choices=["bloodied"], help="each --wave enters on this, not on its round")
+            s.add_argument("--hazard-type", action="append", help="a hazard's damage type, e.g. fire; checked against --immune")
+            s.add_argument("--immune", action="append", help="a damage type the boss is immune to; repeat")
         else:
             s.add_argument("--threat", default="moderate")
         s.add_argument("--json", action="store_true")
@@ -6667,6 +6846,7 @@ def main(argv=None):
     s.add_argument("--session", type=int, default=1); s.set_defaults(fn=cmd_sessionlog)
     s = sub.add_parser("npcs", help="check three-line NPC cards")
     s.add_argument("card"); s.add_argument("--but", action="store_true", help="warn on NPCs with no contradiction")
+    s.add_argument("--agenda", action="store_true", help="warn on NPCs without 2+ goals: and a tell:")
     s.set_defaults(fn=cmd_npcs)
     s = sub.add_parser("world", help="check a setting card's traits")
     s.add_argument("card"); s.set_defaults(fn=cmd_world)
@@ -6739,10 +6919,14 @@ def main(argv=None):
     s.add_argument("--placed", action="append", help="area with a placed population")
     s.add_argument("--from-rooms", help="rooms JSON: foes with patrol: true become the table, out of their rooms")
     s.add_argument("--split", help="N/N/N/N faces of one die: nothing, encounter, event, discovery")
+    s.add_argument("--night-chance", type=int, help="1 in N per check during the night hours")
+    s.add_argument("--night-hours", type=float, default=8, help="the last H hours of --hours are night")
+    s.add_argument("--bump", type=int, default=0, help="after an encounter the next check's N drops by this (noise)")
     s.add_argument("--run", action="store_true"); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_wander)
     s = sub.add_parser("battle", help="a mass battle as three representative fights")
     s.add_argument("plan"); s.add_argument("--results", help="outcome of each fight in order: won,lost,drawn")
     s.add_argument("--resolve", action="store_true", help="plan is two sides of units: resolve without a map")
+    s.add_argument("--strength", action="store_true", help="plan is two sides of units: compare army strength")
     s.add_argument("--rounds", type=int, default=20); s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_battle)
     s = sub.add_parser("review", help="merge highlights and weak points from session logs per player")
@@ -6971,7 +7155,10 @@ def main(argv=None):
     s = sub.add_parser("variant", help="check monster variant cards: base, axis, keeps, tell, counter, role")
     s.add_argument("file"); s.set_defaults(fn=cmd_variant)
     s = sub.add_parser("template", help="5e CR after a template: ladder steps or a scale, rounded up")
-    s.add_argument("--cr", required=True); s.add_argument("--delta", type=int); s.add_argument("--scale", type=float)
+    s.add_argument("--cr"); s.add_argument("--delta", type=int); s.add_argument("--scale", type=float)
+    s.add_argument("--adjust", choices=("elite", "weak"), help="pf2e/sf2e: elite or weak adjustment")
+    s.add_argument("--level", type=int, help="with --adjust: the creature's level")
+    s.add_argument("--party-level", type=int, help="with --adjust: print XP before and after")
     s.add_argument("--template", action="append", help="template name; repeat to stack (warns)")
     s.set_defaults(fn=cmd_template)
     s = sub.add_parser("poison", help="check poison cards: delivery, save, interval, onset, stages, end")
@@ -7010,7 +7197,8 @@ def main(argv=None):
     s.add_argument("--streak", type=int, default=3, help="--renewal: unbroken recasts to make it permanent")
     s.set_defaults(fn=cmd_doomtrack)
     s = sub.add_parser("hazard", help="check a multi-problem hazard round: counters, caps, deadlines, order")
-    s.add_argument("file"); s.set_defaults(fn=cmd_hazard)
+    s.add_argument("file"); s.add_argument("--party", type=int, help="PCs, for start_per_pc and cap_per_pc")
+    s.set_defaults(fn=cmd_hazard)
     s = sub.add_parser("site", help="check a site prep card: entries, upkeep, doors, drops, rumours, clock")
     s.add_argument("file", nargs="?")
     s.add_argument("--recorrupt", type=int, help="days until a cleansed node reverts")

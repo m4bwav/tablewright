@@ -28,3 +28,4 @@ Append-only. One line per operation: `## [YYYY-MM-DD] op | title` where op is on
 - 2026-11-26: 0.27.0 item made_by sink, table --band, mastery, oneshot encounters order, prep --cues, ties (RPG round 2 session 1); .gitattributes forces LF.
 - 2026-11-26: 0.28.0 vehicle, ladder, spell forge, shared SIZE_BANDS table (settlement, venues, market, tax), district neighbours, heat law told, citychange clocks, downtime --preset networking.
 - 2026-11-26: 0.29.0 haul, tpk --reason (folded death check into tpk), improvise, encounter --hearts, houserules slump/rebuild, endgame, scout, tracker poison --damage die step and shelf life (save-each and potency DC were already built); 262 tests.
+- 2026-11-26: 0.30.0 built: nine-node fiveroom, hazard immunity, hazard gates and per-PC, npc secret gates and agenda, penalty cancelled_by, wander night and bump, fake choice, pf2e elite/weak, battle strength.
