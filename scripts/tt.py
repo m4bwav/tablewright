@@ -26,7 +26,11 @@ Commands:
   downtime    check downtime activities (time, cost or sink, outcome table)
   attendance  players present against the roster; advice for absent PCs
   oneshot     check a one-shot card (bond, plot, finish, pregens with stakes)
-  tpk         remedy after a total party kill, by cause
+  tpk         remedy after a total party kill, by cause; --reason judges one PC death
+  haul        treasure in against a planned rate, removal variety, magic shops
+  improvise   a GM gut call (no, maybe, sure) to a DC, our numbers
+  endgame     check a board or card game's endgame: runaway leader, kingmaking, slowdown
+  scout       seeded contested scouting roll; a bad loss gives a false report
   alert       dungeon alert track (init, raise, lower, show)
   backlog     check a campaign hook backlog (5 to 15 open, worsens, ties)
   negotiate   multi-step negotiation, one attitude step per exchange
@@ -178,6 +182,7 @@ def cmd_encounter(a):
     if a.system != "5e" and total > budgets["extreme"]:
         res["notes"].append("over the Extreme budget")
     res["warnings"] = mission_warnings(a) + wave_warns + role_warnings(roles, len(a.foe)) + solo_horde_warnings(a)
+    res["warnings"] += hearts_warnings(a, notes)
     if total > budgets[deadly] and not a.exit:
         res["warnings"].append(f"above {deadly.title()} with no --exit: name the way out (retreat, safe room, parley)")
     if roles:
@@ -481,7 +486,20 @@ def tick_poisons(d):
 
 
 def dc_text(x):
-    return f", DC {x['dc']}" if x.get("dc") else ""
+    return (f", DC {x['dc']}" if x.get("dc") else "") + (f", {x['damage']} damage" if x.get("damage") else "")
+
+
+DIE_STEPS = (4, 6, 8, 10, 12)
+
+
+def step_die(spec, potency):
+    """'2d6' one die step up or down (d4 floor, d12 cap) for a stronger or weaker dose."""
+    import re
+    m = re.fullmatch(r"(\d*)d(\d+)", spec.strip().lower())
+    if not m or int(m.group(2)) not in DIE_STEPS:
+        die(f"--damage {spec!r}: use NdX with X one of 4, 6, 8, 10, 12")
+    i = DIE_STEPS.index(int(m.group(2))) + {"up": 1, "down": -1}.get(potency, 0)
+    return f"{m.group(1)}d{DIE_STEPS[max(0, min(i, len(DIE_STEPS) - 1))]}"
 
 
 def tick_owner(d, name):
@@ -507,6 +525,35 @@ def tick_clocks(d, unit):
             keep.append(c)
     if "clocks" in d:
         d["clocks"] = keep
+
+
+HEART = 10  # HP in one heart block
+HEART_CHIP = 1  # our number: hearts one PC knocks off a foe per round, on average
+
+
+def hearts_warnings(a, notes):
+    """Foe HP as heart blocks against party size and the fight length wanted."""
+    hp = getattr(a, "hearts", None)
+    if not hp:
+        return []
+    warns, total = [], 0
+    for h in hp:
+        if h < 1:
+            die(f"--hearts {h}: foe HP must be 1 or more")
+        n = -(-h // HEART)
+        total += n
+        if n > a.party * 3:
+            warns.append(f"foe with {h} HP is {n} hearts, over 3 per PC ({a.party * 3}); "
+                         "it soaks the whole fight, split it or give it phases")
+    rounds = total / (a.party * HEART_CHIP)
+    notes.append(f"hearts: {total} block(s) of {HEART} HP, about {rounds:.1f} round(s) for {a.party} PCs "
+                 f"(our chip rate {HEART_CHIP} heart per PC per round)")
+    want = a.rounds
+    if rounds > want * 1.5:
+        warns.append(f"{total} hearts is about {rounds:.1f} rounds, past 1.5x the {want} wanted; cut HP or add a way to end it early")
+    elif rounds < want * 0.5:
+        warns.append(f"{total} hearts is about {rounds:.1f} rounds, under half the {want} wanted; the fight may end before it starts")
+    return warns
 
 
 def cmd_tracker(a):
@@ -595,8 +642,14 @@ def cmd_tracker(a):
                     x["save_each"] = True
                 if a.dc:
                     x["dc"] = a.dc + POTENCY.get(a.potency, 0)
-                elif a.potency:
-                    die("--potency needs --dc")
+                elif a.potency and not a.damage:
+                    die("--potency needs --dc or --damage")
+                if a.damage:
+                    x["damage"] = step_die(a.damage, a.potency)
+                    print(f"{a.args[1]} damage {x['damage']} per stage" + (f" (potency {a.potency} from {a.damage})" if a.potency else ""))
+                if a.shelf_life is not None and a.age is not None and a.age > a.shelf_life:
+                    print(f"warn: {a.args[1]} is {a.age:g} days old, past its {a.shelf_life:g}-day shelf life; "
+                          "treat it as potency down or inert")
                 c.setdefault("poisons", []).append(x)
                 print(f"{c['name']}: {a.args[1]} stage 1: {stages[0]}{dc_text(x)}")
             else:
@@ -2407,6 +2460,21 @@ def cmd_houserules(a):
             warns.append(f"{name}: removed with no offset; whatever relied on it (a class, a threat) is now off balance")
         if r.get("kind") in ("add", "change") and not r.get("review_after"):
             warns.append(f"{name}: no review_after (sessions until the table decides to keep it)")
+        if "slump" in r:
+            if str(r["slump"]).lower() not in ("d4", "d6", "d8"):
+                errs.append(f"{name}: slump {r['slump']!r}, use d4, d6 or d8 (a small die added after a run of misses)")
+            if not r.get("slump_after"):
+                warns.append(f"{name}: slump die with no slump_after (how many misses in a row earn it)")
+        if "rebuild" in r:
+            rb = str(r["rebuild"]).lower()
+            if rb not in ("yes", "no"):
+                errs.append(f"{name}: rebuild {r['rebuild']!r}, use yes or no")
+            elif not r.get("misread"):
+                warns.append(f"{name}: rebuild set but no misread (how the table played it until now)")
+            elif rb == "yes":
+                print(f"{name}: corrected rule; let players rebuild what the misread shaped before next session")
+            else:
+                warns.append(f"{name}: corrected rule with rebuild no; say why, a choice built on the misread now feels like a nerf")
     seen = {}
     for r in rules:
         sit = str(r.get("situation") or r.get("trigger") or "").strip().lower()
@@ -3008,8 +3076,29 @@ TPK_KEEP = {
 }
 
 
+DEATH_REASONS = {
+    "dramatic": ("earned", "the death came from a choice made for the story (a last stand, a sacrifice). "
+                 "Give it its moment: a last action, a scene at the end of the session, a mark on the world."),
+    "reckless": ("earned", "the player took a risk the table saw coming. If the danger was shown, let it stand; "
+                 "if nobody could have known, the warning was missing, so offer a way back."),
+    "complacent": ("not earned", "the table coasted and the fight punished it with no warning sign. "
+                   "Look at your setup first: a sudden death with no tell feels arbitrary. "
+                   "Offer a costly rescue or a dying condition instead, and show the threat next time."),
+}
+
+
 def cmd_tpk(a):
     """Support script and remedy after a total party kill, chosen by cause."""
+    if a.reason:
+        verdict, why = DEATH_REASONS[a.reason]
+        print(f"death {a.reason}: {verdict}")
+        print(why)
+        if verdict == "not earned":
+            print("warn: an unearned death costs trust; talk to the player before the next session")
+        if not a.cause:
+            return
+    if not a.cause:
+        die("--cause (gm-error, bad-luck, player-error) for a wipe, or --reason for one PC's death")
     cause = a.cause.lower()
     if cause in ("lesson", "reset", "punish", "punishment"):
         die(f"{cause!r} is not a cause; a wipe is never a lesson to teach. Use gm-error, bad-luck or player-error")
@@ -4556,6 +4645,111 @@ def cmd_template(a):
 
 
 POISON_FIELDS = ("delivery", "save", "interval", "onset", "stages")
+
+
+HAUL_REMOVE = ("theft", "tax", "upkeep", "spend")
+HAUL_BAND = (0.7, 1.3)  # our band: within 70% to 130% of the plan is on track
+
+
+def cmd_haul(a):
+    """Treasure log JSON {entries: [{session, level, gp, kind}]}: income against a planned rate."""
+    d = json.loads(Path(a.log).read_text(encoding="utf-8"))
+    es = d.get("entries", []) if isinstance(d, dict) else d
+    if not es:
+        die("no entries")
+    errs, warns, inc, used = [], [], {}, {}
+    key = "level" if a.per == "level" else "session"
+    for e in es:
+        k, gp = e.get("kind", "treasure"), e.get("gp")
+        if not isinstance(gp, (int, float)) or gp < 0:
+            errs.append(f"entry {e}: gp must be a number 0 or more")
+            continue
+        if k == "treasure":
+            if e.get(key) is None:
+                errs.append(f"treasure entry with no {key}: {e}")
+                continue
+            inc[e[key]] = inc.get(e[key], 0) + gp
+        elif k in HAUL_REMOVE:
+            used[k] = used.get(k, 0) + 1
+        elif k == "magic-shop":
+            if not a.magic_shops:
+                warns.append(f"magic shop entry ({gp:g} gp): bought magic makes treasure a shopping list; "
+                             "pass --magic-shops if your table wants them")
+        else:
+            errs.append(f"kind {k!r}, use treasure, magic-shop or " + ", ".join(HAUL_REMOVE))
+    lo, hi = HAUL_BAND
+    for k in sorted(inc, key=str):
+        r = inc[k] / a.plan
+        line = f"{key} {k}: {inc[k]:g} gp of {a.plan:g} planned ({r:.0%})"
+        if r > hi:
+            warns.append(line + "; over plan, the party will outgrow your threats")
+        elif r < lo:
+            warns.append(line + "; under plan, gear will lag the threats")
+        else:
+            print(line)
+    for k, n in used.items():
+        if n > 1:
+            warns.append(f"removal {k} used {n} times; vary it ({', '.join(HAUL_REMOVE)}) so it does not feel like a tax")
+    if a.xp_for_gold:
+        print(f"xp for gold: {sum(inc.values()):g} XP (1 XP per gp brought home)")
+    report(errs, warns, f"{sum(inc.values()):g} gp in over {len(inc)} {key}(s), band {lo:.0%}-{hi:.0%} (our numbers)")
+
+
+GUT_DC = {"5e": {"sure": 10, "maybe": 15, "no": 20}}
+GUT_PF = {"sure": -5, "maybe": 0, "no": 5}  # our offsets on a level DC of 15 + level
+
+
+def cmd_improvise(a):
+    """A GM gut call to a DC. Our numbers, not any book's table."""
+    if a.system in ("pf2e", "sf2e"):
+        if a.level is None:
+            die("--level is needed for pf2e and sf2e")
+        dc = 15 + a.level + GUT_PF[a.gut]
+    else:
+        dc = GUT_DC["5e"][a.gut]
+    print(f"ok: gut {a.gut} -> DC {dc} ({a.system or '5e'}{f', level {a.level}' if a.level is not None else ''}; tablewright's own numbers)")
+
+
+def cmd_endgame(a):
+    """Board or card game endgame JSON: runaway leader, kingmaking, slowdown near the goal."""
+    d = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    errs, warns = [], []
+    if not d.get("goal"):
+        errs.append("no goal: what ends the game")
+    if d.get("leader_reward") and not d.get("catch_up"):
+        warns.append("leading earns more (leader_reward) and there is no catch_up; a runaway leader ends the contest early")
+    if d.get("out_of_contention_can_act") and not d.get("hidden_score"):
+        warns.append("players who cannot win can still swing the result and scores are open; kingmaking risk")
+    tm = d.get("turn_minutes") or {}
+    early, late = tm.get("early"), tm.get("late")
+    if isinstance(early, (int, float)) and isinstance(late, (int, float)) and early > 0:
+        if late > early * 1.5:
+            warns.append(f"late turns take {late:g} min against {early:g} early; the game drags near the goal "
+                         "(cut choices, add an accelerator)")
+    elif tm:
+        errs.append("turn_minutes wants numbers early and late")
+    if d.get("leader_reward") is None:
+        warns.append("no leader_reward: say whether being ahead pays more")
+    report(errs, warns, "endgame checked (runaway leader, kingmaking, slowdown)")
+
+
+def cmd_scout(a):
+    """Contested scouting: d20 + scout mods against d20 + hider mods; a bad loss is a false report."""
+    import random
+    rng = random.Random(a.seed)
+    sm, hm = sum(a.scout_mod or []), sum(a.hide_mod or [])
+    sr, hr = rng.randint(1, 20), rng.randint(1, 20)
+    margin = (sr + sm) - (hr + hm)
+    print(f"scout {sr}{sm:+d} = {sr + sm} vs hide {hr}{hm:+d} = {hr + hm} (margin {margin:+d})")
+    if margin >= 5:
+        print("ok: true report, full: numbers, kind and where they are headed")
+    elif margin >= 0:
+        print("ok: true report, partial: where they are and roughly how many")
+    elif margin > -5:
+        print("warn: false report: give the player wrong numbers or a wrong place, stated as fact")
+    else:
+        print("warn: no report; the scouts were seen, the enemy knows it is watched")
+    print("(contested d20 with bands of 5 is tablewright's own scheme)")
 
 
 def cmd_poison(a):
@@ -6398,6 +6592,8 @@ def main(argv=None):
             s.add_argument("--clock", type=int, help="rounds before the mission fails")
             s.add_argument("--healers", type=int, default=0, help="foes that heal or grant temp HP")
             s.add_argument("--hazard", action="append", help="hazard level or CR; identical repeats count barely more than one")
+            s.add_argument("--hearts", type=int, action="append", help="foe HP, repeat per foe; counted in 10-HP heart blocks")
+            s.add_argument("--rounds", type=int, default=3, help="with --hearts: rounds the fight should last")
             s.add_argument("--wave", action="append", help="reinforcements ROUND:COUNTxFOE[:removed_by]")
             s.add_argument("--pool", type=int, help="total defenders the waves can draw from")
             s.add_argument("--prep", action="append", help="a prep step the party finished; removes waves naming it")
@@ -6427,7 +6623,10 @@ def main(argv=None):
     t.add_argument("--owner", help="countdown: the combatant whose turn turns the die down")
     t.add_argument("--save-each", action="store_true", help="poison: a save every round, not only at a stage change")
     t.add_argument("--dc", type=int, help="poison: save DC shown with each save")
-    t.add_argument("--potency", choices=["up", "down"], help="poison: a stronger or weaker dose, DC +/-2")
+    t.add_argument("--potency", choices=["up", "down"], help="poison: a stronger or weaker dose, DC +/-2 and one die step")
+    t.add_argument("--damage", help="poison: damage dice per stage (NdX); potency steps the die")
+    t.add_argument("--shelf-life", type=float, help="poison: days a dose keeps")
+    t.add_argument("--age", type=float, help="poison: days since the dose was made")
     t.add_argument("--unit", choices=["turn", "round"], default="round", help="clock: ticks on each next or at the round wrap")
     t.add_argument("--fail", action="store_true", help="clock tick: a failure ticks one extra")
     t.add_argument("--timer", type=int, help="init: seconds per player turn; 'late' delays whoever runs out")
@@ -6637,7 +6836,8 @@ def main(argv=None):
     s = sub.add_parser("oneshot", help="check a one-shot card: bond, plot, finish, pregens")
     s.add_argument("card"); s.set_defaults(fn=cmd_oneshot)
     s = sub.add_parser("tpk", help="what to do after a total party kill, by cause")
-    s.add_argument("--cause", required=True, help="gm-error, bad-luck or player-error")
+    s.add_argument("--cause", help="gm-error, bad-luck or player-error")
+    s.add_argument("--reason", choices=list(DEATH_REASONS), help="one PC died: is the death earned?")
     s.add_argument("--keep-pcs", action="store_true", help="the players want their characters back")
     s.set_defaults(fn=cmd_tpk)
     s = sub.add_parser("alert", help="dungeon alert track")
@@ -6900,6 +7100,22 @@ def main(argv=None):
     s.add_argument("action", choices=["check", "draw", "advance"]); s.add_argument("deck")
     s.add_argument("--by", type=int, default=1); s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_citychange)
+    s = sub.add_parser("haul", help="treasure in against a planned rate per session or level")
+    s.add_argument("log"); s.add_argument("--plan", type=float, required=True, help="planned gp per session or level")
+    s.add_argument("--per", choices=["session", "level"], default="session")
+    s.add_argument("--xp-for-gold", action="store_true", help="print XP earned at 1 per gp of treasure")
+    s.add_argument("--magic-shops", action="store_true", help="the table allows buying magic; no warning")
+    s.set_defaults(fn=cmd_haul)
+    s = sub.add_parser("improvise", help="a GM gut call to a DC (our numbers)")
+    s.add_argument("--gut", choices=["no", "maybe", "sure"], required=True, help="no: unlikely, maybe: could go either way, sure: likely")
+    s.add_argument("--system", choices=["pf2e", "sf2e", "5e"]); s.add_argument("--level", type=int)
+    s.set_defaults(fn=cmd_improvise)
+    s = sub.add_parser("endgame", help="check a board or card game endgame JSON")
+    s.add_argument("file"); s.set_defaults(fn=cmd_endgame)
+    s = sub.add_parser("scout", help="contested scouting roll that can return a false report")
+    s.add_argument("--scout-mod", type=int, action="append", help="additive scout modifier, repeat")
+    s.add_argument("--hide-mod", type=int, action="append", help="additive hider modifier, repeat")
+    s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_scout)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)

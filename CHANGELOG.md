@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.29.0 (2026-11-26)
+- `tt.py haul LOG --plan GP [--per session|level] [--xp-for-gold] [--magic-shops]`: treasure brought in against a planned rate, warn outside 70% to 130%; removal kinds (theft, tax, upkeep, spend) used more than once warn as a variety check; magic shop entries warn unless allowed; `--xp-for-gold` prints 1 XP per gp. Idea inspired by the AD&D 2nd Edition Dungeon Master's Guide, pp. 104, 181-182.
+- `tpk --reason dramatic|reckless|complacent`: a verdict on whether one PC's death is earned, with advice; `--cause` is now optional when `--reason` is given. Idea inspired by 4th Edition D&D For Dummies (DM part), pp. 139-140.
+- `tt.py improvise --gut no|maybe|sure [--system S --level N]`: a GM gut call to a DC (5e flat 10/15/20, pf2e and sf2e 15 + level, -5 or +5). Idea inspired by 4th Edition D&D For Dummies, pp. 138-139.
+- `encounter --hearts HP [--rounds N]`: foe HP in 10-HP heart blocks; warns when one foe is over 3 hearts per PC or the fight runs past 1.5x or under half the rounds wanted (our chip rate of 1 heart per PC per round). Idea inspired by ICRPG 2e Core, pp. 77, 81.
+- `houserules`: a `slump` field (d4, d6 or d8 with `slump_after`) and `rebuild: yes|no` with `misread` for a corrected long-misread rule. Ideas inspired by ICRPG 2e Core, p. 80.
+- `tt.py endgame FILE`: board or card game endgame check: leader reward with no catch-up (runaway leader), open scores with players out of contention who can still act (kingmaking), late turns over 1.5x early ones (slowdown). Idea inspired by the Kobold Guide to Board Game Design, pp. 22-26, 99-103.
+- `tt.py scout [--scout-mod N]... [--hide-mod N]... [--seed S]`: seeded contested d20 scouting roll with additive modifiers; win by 5 for a full report, lose by under 5 for a false report, by 5 or more for no report and spotted scouts. Idea inspired by Domains at War: Campaigns, pp. 59, 62.
+- `tracker poison --damage NdX [--shelf-life D --age D]`: potency now also moves the damage die one step (d4 to d12); a dose past its shelf life warns. Per-round saves (`--save-each`), potency DC and card shelf life were already built. Idea inspired by Poisons, pp. 2-4.
+- All numbers are ours; no book text or tables copied. 8 new tests (262 total).
+
 ## 0.28.0 (2026-11-26)
 - `tt.py vehicle check|hit CARD [--damage N] [--part P | --seed S]`: vehicle damage split over exactly three parts (for example hull, drive, crew or weapons); a hit goes to a named part or a d6 location, and a part at 0 loses its function. Idea inspired by Altered State, p. 35.
 - `tt.py ladder LOGS... [--start N] [--small TEXT] [--big TEXT]`: a 10-step reward ladder; each `ladder:` log line climbs a step, step 10 pays the big reward and wraps to 1. Idea inspired by Altered State, p. 39.
