@@ -53,6 +53,14 @@ Commands:
   playtest    check a blind playtest log
   mastery     mastery marks per school (4 from one trigger kind, 4th halves the cost)
   ties        PC bonds and plot ties used across session logs
+  explore     exploring turns: pace and tasks per PC
+  stash       where a keeper hides valuables
+  shop        check shop entries
+  clues       clue tiers per fact
+  repair      stacked damage, diagnose then repair
+  hire        hired help wage by skill level
+  act         gate quests reachable from the other quests' XP
+  pcs         per-PC files and level drift
   licence     notices for the bundled rules tables
 
 Exit 2 is a usage or validation error.
@@ -778,6 +786,8 @@ def load_char(path):
 
 
 def cmd_check(a):
+    if a.haste or a.caution:
+        return check_pace(a)
     if a.lint:
         return check_lint(a)
     if a.uncertain:
@@ -1199,6 +1209,8 @@ def prep_flow(lines, errs, warns):
 
 def cmd_world(a):
     """Check a setting card: 6 to 8 traits, each tied to a place, NPC or faction the players can meet."""
+    if a.magic:
+        return world_magic(a)
     sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
     traits = [l[2:].strip() for l in sec.get("traits", []) if l[:2] in ("- ", "* ")]
     errs = []
@@ -3390,9 +3402,16 @@ def cmd_negotiate(a):
         die("--start is one of " + ", ".join(ATTITUDES))
     i = ATTITUDES.index(a.start)
     goal = ATTITUDES.index(a.goal)
-    mods = a.exchange or []
+    mods = list(a.exchange or [])
     rolls = a.rolls or []
     print(f"start: {a.start}; goal: {a.goal}")
+    if a.bribe is not None:
+        m = bribe_mod(a)
+        if m is None:
+            i = max(0, i - 1)
+            print(f"now: {ATTITUDES[i]}")
+        elif mods:
+            mods[0] += m
     for n, m in enumerate(mods, 1):
         r = rolls[n - 1] if n - 1 < len(rolls) else rng.randint(1, 6) + rng.randint(1, 6)
         total = r + m
@@ -3886,7 +3905,11 @@ ROOM_KEYS = ("timer", "threat", "treat")  # the same tags prep's fight check rea
 
 def cmd_rooms(a):
     """Rooms JSON {rooms: [{name, timer, threat, treat, stake, wonder, enemies, difficulty, damage, disruption, duration}]}."""
+    if a.force:
+        return rooms_force(a)
     rooms = load_list(a.file, "rooms")
+    if a.eras:
+        return rooms_eras(a, rooms)
     if a.skip:
         return rooms_skip(a, rooms)
     if a.rally:
@@ -5169,6 +5192,10 @@ def band_pct(step):
 
 def cmd_trade(a):
     """Price of a regional haul: one compounding step per --step road hexes."""
+    if a.week:
+        return trade_week(a)
+    if a.price is None or a.hexes is None:
+        die("trade needs --price and --hexes (or --week N)")
     import random
     rng = random.Random(a.seed)
     band = [band_pct(x) for x in a.band.split(",")]
@@ -6009,6 +6036,8 @@ def cmd_site(a):
     """Site prep JSON: location, entries, upkeep, ecology, visitors; doors, drops, treasure, rumours; a clock with signs."""
     if a.recorrupt is not None:
         return site_recorrupt(a)
+    if a.edge or a.ward:
+        return site_edge_ward(a)
     if a.lint or a.upkeep or a.threats:
         return site_stronghold_extra(a)
     if not a.file:
@@ -6089,6 +6118,9 @@ def cmd_carry(a):
     print(f"{a.group}: started {g['start']}, killed {g['killed']}, fled {g['fled']}; next wave {left}")
     if g["fled"]:
         print(f"  {g['fled']} of them fled: they come back as a return wave, warned")
+    if a.resources:
+        carry_resources(a, g)
+        f.write_text(json.dumps(d, indent=1), encoding="utf-8")
 
 
 def chase_pursuit(a, rng):
@@ -6512,6 +6544,8 @@ ADVENTURE_PILLARS = ("combat", "social", "explore", "either")
 def cmd_adventure(a):
     """Adventure JSON {scenes: [{name, pillar, optional}]}: --pillars counts required and optional scenes per
     pillar; warns when combat or social is missing, one pillar holds over half, or nothing is optional."""
+    if a.day:
+        return adventure_day(a)
     if a.elements or a.info or a.twists or a.epilogue or a.hook:
         d = load_json(a.file)
         errs, warns = [], []
@@ -8845,6 +8879,417 @@ def encounter_phase(a):
         print("warn: --phase terrain is part of the boss fight, not a hazard; do not also count it as --hazard XP")
 
 
+# 0.38.0: daily load, exploring tasks, shops and stashes, task pace, clue tiers, bribes, repair, trade weeks,
+# hire rates, forcing doors, eras, edges and wards, quest gates, rematch resources, PC files, magic. Every number is ours.
+
+DAY_WEIGHT = {"easy": 1, "medium": 2, "hard": 3, "deadly": 4}  # fight load per difficulty; ours
+DAY_CAP = 12  # load a party can take between long rests; ours (about six medium fights)
+
+
+def adventure_day(a):
+    """scenes in play order with difficulty, and rest: short|long markers: load per day and hard runs."""
+    scenes = load_list(a.file, "scenes")
+    errs, warns, day, load, run, days = [], [], 1, 0, 0, []
+    for s in scenes:
+        r = str(s.get("rest", "")).lower()
+        if r in ("short", "long"):
+            run = 0
+            if r == "long":
+                days.append((day, load))
+                day += 1
+                load = 0
+            continue
+        d = str(s.get("difficulty", "")).lower()
+        if d not in DAY_WEIGHT:
+            errs.append(f"{s.get('name', '?')}: difficulty {d or 'missing'}, use " + ", ".join(DAY_WEIGHT))
+            continue
+        load += DAY_WEIGHT[d]
+        run = run + 1 if d in ("hard", "deadly") else 0
+        if run == 3:
+            warns.append(f"day {day}: three hard or deadly fights in a row at {s.get('name', '?')}; put a short rest between")
+    if load:
+        days.append((day, load))
+    for n, l in days:
+        print(f"day {n}: load {l} of {a.cap:g}")
+        if l > a.cap:
+            warns.append(f"day {n}: load {l} over {a.cap:g}; expect a retreat or a death")
+        elif l < a.cap / 3:
+            warns.append(f"day {n}: load {l} under a third of {a.cap:g}; casters can spend freely")
+    report(errs, warns, f"{len(days)} adventuring day(s)")
+
+
+EXPLORE_TASKS = ("watch", "map", "navigate", "sneak", "forage", "none")
+
+
+def cmd_explore(a):
+    """turns [{pace fast|normal|slow, tasks {pc: [task]}}]: what each turn can and cannot do."""
+    turns = load_list(a.file, "turns")
+    errs, warns = [], []
+    for i, t in enumerate(turns, 1):
+        pace = str(t.get("pace", "normal")).lower()
+        if pace not in ("fast", "normal", "slow"):
+            errs.append(f"turn {i}: pace {pace}, use fast, normal or slow")
+            continue
+        done = set()
+        for pc, ts in (t.get("tasks") or {}).items():
+            ts = [x for x in (ts if isinstance(ts, list) else [ts]) if x != "none"]
+            for x in ts:
+                if x not in EXPLORE_TASKS:
+                    errs.append(f"turn {i}: {pc} task {x}, use " + ", ".join(EXPLORE_TASKS))
+            if pace == "fast" and ts:
+                errs.append(f"turn {i}: {pc} does {', '.join(ts)} at a fast pace; fast allows no tasks")
+            if "sneak" in ts and pace != "slow":
+                warns.append(f"turn {i}: {pc} sneaks at a {pace} pace; sneaking needs slow")
+            if len(ts) >= 2:
+                warns.append(f"turn {i}: {pc} does two tasks; disadvantage on both")
+            done.update(ts)
+        dc = a.lost_dc - (a.map_cut if "map" in done else 0)
+        line = f"turn {i} ({pace}): " + (", ".join(sorted(done)) or "no tasks")
+        line += f"; lost DC {dc}" if "navigate" in done else "; no navigator, the GM decides if they stray"
+        print(line)
+        if "watch" not in done:
+            warns.append(f"turn {i}: no watch; hidden things and ambushes go unseen")
+    report(errs, warns, f"{len(turns)} exploring turn(s)")
+
+
+STASH_ROOM = ("bedroom", "study", "kitchen", "cellar", "shop floor", "storeroom", "attic", "shrine corner")
+STASH_SPOT = ("under the floor", "inside a wall", "up in the ceiling", "behind a hearth stone", "under the stairs",
+              "in plain sight")
+STASH_PART = ("a false bottom", "a hollow leg", "a loose panel", "the lid lining", "a hollow handle", "a sewn seam")
+STASH_BOX = ("a pouch", "a small chest", "a sealed jar", "a rolled cloth", "a tin box", "a book with cut pages")
+
+
+def cmd_stash(a):
+    """Where a keeper hides valuables: room, spot, object part, container, maybe a ward, 1 in N a special find."""
+    import random
+    rng = random.Random(a.seed)
+    for n in range(1, a.count + 1):
+        line = (f"stash {n}: {rng.choice(STASH_ROOM)}, {rng.choice(STASH_SPOT)}, in {rng.choice(STASH_PART)} "
+                f"of the furniture, held in {rng.choice(STASH_BOX)}")
+        if rng.randint(1, 100) <= a.magic:
+            line += "; magically warded"
+        if rng.randint(1, a.special) == 1:
+            line += "; a special find beside it (write one)"
+        print(line)
+
+
+SHOP_PRICE = ("min_order", "lead_time", "trade_ins", "buy_back")
+
+
+def cmd_shop(a):
+    """shops [{name, quarter, keepers [{name, role}], customers, price {min_order, lead_time, trade_ins, buy_back}, quirk, hook}]."""
+    shops = load_list(a.file, "shops")
+    errs, warns = [], []
+    for s in shops:
+        n = s.get("name", "?")
+        for k, why in (("quarter", "which part of town"), ("customers", "who shops here, poorest to richest")):
+            if not s.get(k):
+                errs.append(f"{n}: no {k} ({why})")
+        ks = s.get("keepers") or []
+        if not ks:
+            errs.append(f"{n}: no keepers; list them most important first")
+        elif not all(isinstance(k, dict) and k.get("role") for k in ks):
+            warns.append(f"{n}: keepers want a role each (owner, clerk, apprentice)")
+        p = s.get("price") or {}
+        if not any(p.get(k) for k in SHOP_PRICE):
+            errs.append(f"{n}: price line has none of " + ", ".join(SHOP_PRICE))
+        for k in ("quirk", "hook"):
+            v = s.get(k)
+            if not v:
+                errs.append(f"{n}: no {k}")
+            elif isinstance(v, list) and len(v) > 1:
+                warns.append(f"{n}: {len(v)} {k}s; one is easier to remember")
+    report(errs, warns, f"{len(shops)} shop(s)")
+
+
+HASTE = (0.5, 4)  # haste: time times 0.5, DC +4; ours
+CAUTION = (2.0, -4)  # caution: time times 2, DC -4; ours
+
+
+def d20_odds(dc, bonus):
+    return max(0, min(20, 21 - (dc - bonus))) / 20
+
+
+def check_pace(a):
+    if a.dc is None:
+        die("--haste/--caution need --dc")
+    mul, shift = HASTE if a.haste else CAUTION
+    print(f"normal: {a.time:g} min at DC {a.dc}: {d20_odds(a.dc, a.bonus):.0%}")
+    word = "haste" if a.haste else "caution"
+    print(f"{word}: {a.time * mul:g} min at DC {a.dc + shift}: {d20_odds(a.dc + shift, a.bonus):.0%}")
+
+
+CLUE_TIERS = ("known", "cheap", "costly", "never")
+
+
+def cmd_clues(a):
+    """facts [{fact, core, clues [{name, tier known|cheap|costly|never, cost}]}]: core facts need a known or cheap clue."""
+    facts = load_list(a.file, "facts")
+    errs, warns, count = [], [], {t: 0 for t in CLUE_TIERS}
+    for f in facts:
+        n = f.get("fact", "?")
+        tiers = []
+        for c in f.get("clues") or []:
+            t = str(c.get("tier", "")).lower()
+            if t not in CLUE_TIERS:
+                errs.append(f"{n}: clue {c.get('name', '?')} tier {t or 'missing'}, use " + ", ".join(CLUE_TIERS))
+                continue
+            count[t] += 1
+            tiers.append(t)
+            if t == "costly" and not c.get("cost"):
+                errs.append(f"{n}: costly clue {c.get('name', '?')} names no cost (time, money, risk)")
+        if f.get("core") and not ({"known", "cheap"} & set(tiers)):
+            errs.append(f"{n}: core fact with no known or cheap clue; the party can stall here")
+        if tiers and all(t == "never" for t in tiers):
+            warns.append(f"{n}: every clue is never; the fact cannot be learned")
+    print(", ".join(f"{t} {count[t]}" for t in CLUE_TIERS))
+    report(errs, warns, f"{len(facts)} fact(s)")
+
+
+BRIBE_BANDS = ((0.1, None, "an insult: talks move down one step"), (0.5, 2, "a sweetener"),
+               (1.0, 4, "a real temptation"), (float("inf"), 6, "too much: they wonder what you are buying"))  # ours
+
+
+def bribe_mod(a):
+    """Modifier for the first exchange, or None for a step down."""
+    if a.wealth is None or a.wealth <= 0:
+        die("--bribe needs --wealth W (their usual monthly take)")
+    r = a.bribe / a.wealth
+    if a.honest:
+        print(f"bribe {a.bribe:g} ({r:.0%} of a month): an honest NPC takes offence; one step down")
+        return None
+    for top, mod, word in BRIBE_BANDS:
+        if r < top:
+            print(f"bribe {a.bribe:g} ({r:.0%} of a month): {word}" + (f"; {mod:+d} to the first exchange" if mod else ""))
+            return mod
+
+
+REPAIR_TIER = {"minor": (12, 1.0), "major": (16, 4.0)}  # DC and hours; ours
+DIAG = (12, 0.25)  # diagnosis DC and hours; a miss adds +2 DC to the first repair; ours
+REPAIR_ORDER = ("destroyed", "major", "minor")
+
+
+def cmd_repair(a):
+    """--stack minor,major,destroyed: diagnose first, worst first, a d20 per try."""
+    import random
+    rng = random.Random(a.seed)
+    items = [x.strip().lower() for x in (a.stack or "").split(",") if x.strip()]
+    if not items or any(x not in REPAIR_ORDER for x in items):
+        die("repair --stack with tiers minor, major, destroyed")
+    r = rng.randint(1, 20)
+    found = r + a.bonus >= DIAG[0]
+    hours, extra = DIAG[1], 0 if found else 2
+    print(f"diagnose: d20 {r} {a.bonus:+d} vs DC {DIAG[0]}: " + ("found" if found else "wrong guess, first repair +2 DC"))
+    for x in sorted(items, key=REPAIR_ORDER.index):
+        if x == "destroyed":
+            print("destroyed: replace the part; no roll fixes it")
+            continue
+        dc, h = REPAIR_TIER[x]
+        for t in range(1, a.tries + 1):
+            r = rng.randint(1, 20)
+            hours += h
+            need, extra = dc + extra, 0
+            if r + a.bonus >= need:
+                print(f"{x}: fixed on try {t} (d20 {r}, DC {need})")
+                break
+        else:
+            print(f"{x}: not fixed after {a.tries} tries")
+    print(f"time: {hours:g} hours")
+
+
+TRADE_SWING = {2: -30, 3: -20, 4: -20, 5: -10, 6: -10, 7: 0, 8: 10, 9: 10, 10: 20, 11: 20, 12: 30}  # 2d6 -> %; ours
+
+
+def trade_week(a):
+    import random
+    rng = random.Random(a.seed)
+    if a.price is None or a.price <= 0:
+        die("--week needs --price above 0")
+    best = None
+    for w in range(1, a.week + 1):
+        r = rng.randint(1, 6) + rng.randint(1, 6)
+        p = a.price * (1 + TRADE_SWING[r] / 100)
+        net = p - a.upkeep * w
+        print(f"week {w}: 2d6 {r} {TRADE_SWING[r]:+d}% -> {p:.0f}, net {net:.0f} after {a.upkeep * w:g} upkeep")
+        if best is None or net > best[1]:
+            best = (w, net)
+    print(f"best: sell in week {best[0]} for net {best[1]:.0f}")
+
+
+HIRE_LONG = 0.8  # a month's hire costs this share of 30 day wages; ours
+
+
+def cmd_hire(a):
+    """Day wage by skill level: base times (level + 1), doubled for danger; a month is cheaper per day."""
+    if a.rate < 0:
+        die("--rate is a skill level 0 or more")
+    day = a.base * (a.rate + 1) * (2 if a.danger else 1)
+    print(f"skill {a.rate}{' (danger)' if a.danger else ''}: {day:g} a day, {day * 7:g} a week, "
+          f"{day * 30 * HIRE_LONG:g} a month (long hire)")
+    if a.days:
+        print(f"{a.days} days: {day * a.days * (HIRE_LONG if a.days >= 30 else 1):g}")
+
+
+def rooms_force(a):
+    """doors [{name, force {dc, minutes, noise}, lock {dc, minutes, noise}}]: tries until open, a wander roll each."""
+    import random
+    rng = random.Random(a.seed)
+    d = load_json(a.file)
+    door = next((x for x in d.get("doors") or [] if x.get("name") == a.force), None)
+    if not door:
+        die(f"no door {a.force!r} in doors")
+    how = door.get("lock") if a.pick else door.get("force")
+    if not how:
+        die(f"{a.force}: no {'lock' if a.pick else 'force'} block")
+    loud = (how.get("noise") or ("quiet" if a.pick else "loud")) == "loud"
+    n = max(2, a.chance // 2) if loud else a.chance
+    dc, mins, met = how.get("dc", 15), 0, 0
+    for t in range(1, a.tries + 1):
+        r = rng.randint(1, 20)
+        mins += how.get("minutes", 1)
+        w = rng.randint(1, n) == 1
+        met += w
+        print(f"try {t}: d20 {r} {a.bonus:+d} vs DC {dc}, {mins} min" + (f"; wandering monster (1 in {n})" if w else ""))
+        if r + a.bonus >= dc:
+            print(f"open after {t} tries, {mins} minutes, {met} wandering roll(s) hit")
+            return
+    print(f"still shut after {a.tries} tries, {mins} minutes, {met} wandering roll(s) hit")
+
+
+ERA_ORDER = ("past", "present", "future")
+
+
+def rooms_eras(a, rooms):
+    """rooms [{name, eras {past|present|future: {treasure [..], portal}}}]: visit order; claimed loot gone later."""
+    visits = [e.strip().lower() for e in a.eras.split(",") if e.strip()]
+    if any(e not in ERA_ORDER for e in visits):
+        die("eras are " + ", ".join(ERA_ORDER))
+    errs, warns, claimed = [], [], {}
+    for e in visits:
+        here = [r for r in rooms if e in (r.get("eras") or {})]
+        if not any((r["eras"][e] or {}).get("portal") for r in here):
+            errs.append(f"{e}: no room with portal: true; where does the party arrive?")
+        for r in here:
+            for t in (r["eras"][e] or {}).get("treasure") or []:
+                key = (r.get("name"), t)
+                if key in claimed and ERA_ORDER.index(e) >= ERA_ORDER.index(claimed[key]):
+                    print(f"{e}: {r.get('name')}: {t} gone (taken in the {claimed[key]})")
+                elif key in claimed:
+                    warns.append(f"{e}: {r.get('name')}: {t} is here again before it was taken; decide if it can be taken twice")
+                else:
+                    claimed[key] = e
+                    print(f"{e}: {r.get('name')}: {t}")
+    for r in rooms:
+        for e in r.get("eras") or {}:
+            if e not in ERA_ORDER:
+                warns.append(f"{r.get('name')}: unknown era {e}")
+            elif e not in visits:
+                warns.append(f"{r.get('name')}: {e} is never visited")
+    report(errs, warns, "visit order " + " -> ".join(visits))
+
+
+def site_edge_ward(a):
+    """areas in order [{name, edge lethal, fall_safe, ward [flight, teleport], routes [{name, magic}]}]."""
+    areas = load_list(a.file, "areas")
+    errs, warns = [], []
+    if a.edge:
+        safe = False
+        for x in areas:
+            safe = safe or bool(x.get("fall_safe"))
+            if str(x.get("edge", "")).lower() == "lethal":
+                if not safe:
+                    warns.append(f"{x.get('name', '?')}: first lethal edge with no fall-safety item before it")
+                break
+    if a.ward:
+        for x in areas:
+            if x.get("ward") and not any(not r.get("magic") for r in x.get("routes") or []):
+                errs.append(f"{x.get('name', '?')}: warded against {', '.join(x['ward'])} with no non-magical route in")
+    report(errs, warns, f"{len(areas)} area(s)")
+
+
+def cmd_act(a):
+    """{system 5e|pf2e, pcs, split, start_level, quests [{name, xp, gate, min_level}]}: can each gate be reached?"""
+    d = load_json(a.file)
+    qs = d.get("quests") or []
+    pcs = max(1, int(d.get("pcs", 4)))
+    lv = int(d.get("start_level", 1))
+    gates = [q for q in qs if q.get("gate")]
+    if not gates:
+        die("no quest with gate: true")
+    xp = sum(q.get("xp", 0) for q in qs if not q.get("gate"))
+    each = xp / pcs if d.get("split") else xp
+    if d.get("system", "pf2e") == "5e":
+        reach = sum(1 for t in LEVEL_XP_5E if t <= LEVEL_XP_5E[lv - 1] + each)
+    else:
+        reach = lv + int(each // 1000)
+    errs = []
+    for g in gates:
+        need = int(g.get("min_level", lv))
+        print(f"{g.get('name', '?')}: other quests give {each:g} XP a PC, reach level {reach}, gate wants {need}")
+        if reach < need:
+            errs.append(f"{g.get('name', '?')}: level {reach} from the other quests, gate needs {need}; add XP or lower it")
+    report(errs, [], f"{len(gates)} gate quest(s) reachable")
+
+
+def carry_resources(a, g):
+    if a.hp_lost is not None:
+        g["hp_lost"] = max(0, min(100, a.hp_lost))
+    if a.slots_spent is not None:
+        g["slots_spent"] = a.slots_spent
+    left = g["start"] - g["killed"]
+    hp = g.get("hp_lost", 0)
+    print(f"  rematch: {left} of {g['start']} with {hp}% HP lost and {g.get('slots_spent', 0)} slot(s) spent (no rest)")
+    if a.xp:
+        print(f"  rematch XP: {a.xp * left / max(1, g['start']) * (1 - hp / 100):.0f} of {a.xp:g}")
+
+
+PC_FILE = ("secrets", "devices", "owed", "writeout")
+
+
+def cmd_pcs(a):
+    """pcs [{name, level, secrets, devices, owed, writeout}]: file completeness; --drift levels against the median."""
+    pcs = load_list(a.file, "pcs")
+    errs, warns = [], []
+    if not a.drift:
+        for p in pcs:
+            miss = [k for k in PC_FILE if not p.get(k)]
+            if miss:
+                errs.append(f"{p.get('name', '?')}: no " + ", ".join(miss))
+    else:
+        lv = sorted(int(p.get("level", 1)) for p in pcs)
+        mid = lv[len(lv) // 2]
+        for p in pcs:
+            dv = int(p.get("level", 1)) - mid
+            print(f"{p.get('name', '?')}: level {p.get('level', 1)} ({dv:+d})")
+            if abs(dv) >= 4:
+                errs.append(f"{p.get('name', '?')}: {dv:+d} levels from the party; catch them up or split the XP")
+            elif abs(dv) >= 2:
+                warns.append(f"{p.get('name', '?')}: {dv:+d} levels from the party; watch the spotlight")
+    report(errs, warns, f"{len(pcs)} PC file(s)")
+
+
+def world_magic(a):
+    """## Magic bullets abundance:, cost_per_use:, finite:, controller:, lever: (1 to 3)."""
+    sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
+    b = bullets_of(sec.get("magic", []))
+    if not b:
+        die("--magic needs a ## Magic section")
+    kv = {}
+    for x in b:
+        k, _, v = x.partition(":")
+        kv.setdefault(k.strip().lower(), []).append(v.strip())
+    errs, warns = [], []
+    for k in ("abundance", "cost_per_use"):
+        if not kv.get(k):
+            errs.append(f"magic: no {k}:")
+    if kv.get("finite") and not kv.get("controller"):
+        errs.append("magic: finite with no controller: (who holds the supply)")
+    n = len(kv.get("lever", []))
+    if not 1 <= n <= 3:
+        warns.append(f"magic: {n} lever: lines, want 1 to 3 feel levers")
+    report(errs, warns, "magic block")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -8924,6 +9369,9 @@ def main(argv=None):
     s.add_argument("--lint", action="store_true", help="the file is check cards: 2+ stacked mods warn, fail tag needed")
     s.add_argument("--uncertain", action="store_true", help="hidden GM roll: full, partial or false result")
     s.add_argument("--dc", type=int); s.add_argument("--bonus", type=int, default=0); s.add_argument("--seed", type=int)
+    s.add_argument("--haste", action="store_true", help="half the time, DC +4 (ours): odds against normal")
+    s.add_argument("--caution", action="store_true", help="double the time, DC -4 (ours): odds against normal")
+    s.add_argument("--time", type=float, default=10, help="--haste/--caution: normal minutes")
     s.set_defaults(fn=cmd_check)
     s = sub.add_parser("prep", help="check a session prep card")
     s.add_argument("card"); s.add_argument("--leads", type=int, default=3)
@@ -8964,7 +9412,9 @@ def main(argv=None):
     s.add_argument("--roles", action="store_true", help="role: patron|ally|...|wild card with activates:, hinderer tell")
     s.set_defaults(fn=cmd_npcs)
     s = sub.add_parser("world", help="check a setting card's traits")
-    s.add_argument("card"); s.set_defaults(fn=cmd_world)
+    s.add_argument("card")
+    s.add_argument("--magic", action="store_true", help="## Magic: abundance, cost, finite and controller, 1-3 levers")
+    s.set_defaults(fn=cmd_world)
     s = sub.add_parser("fiveroom", help="check an adventure plan against the five-role arc")
     s.add_argument("plan"); s.set_defaults(fn=cmd_fiveroom)
     s = sub.add_parser("table", help="check a random encounter table CSV")
@@ -9090,7 +9540,9 @@ def main(argv=None):
     s.add_argument("--check", action="store_true", help="file is a lead slate to check")
     s.set_defaults(fn=cmd_journey)
     s = sub.add_parser("trade", help="price of a regional haul over road hexes")
-    s.add_argument("--price", type=float, required=True); s.add_argument("--hexes", type=int, required=True)
+    s.add_argument("--price", type=float); s.add_argument("--hexes", type=int)
+    s.add_argument("--week", type=int, help="weeks to hold the goods: a 2d6 market swing each week (ours)")
+    s.add_argument("--upkeep", type=float, default=0, help="--week: storage and living cost a week")
     s.add_argument("--step", type=int, default=5); s.add_argument("--band", default=TRADE_BAND)
     s.add_argument("--weights", default=TRADE_WEIGHTS)
     s.add_argument("--capacity", type=int); s.add_argument("--sold", type=int)
@@ -9193,6 +9645,9 @@ def main(argv=None):
     s.add_argument("--start", default="neutral"); s.add_argument("--goal", choices=ATTITUDES, default="helpful")
     s.add_argument("--exchange", type=int, action="append", help="modifier for one exchange; repeat per exchange")
     s.add_argument("--rolls", type=int, nargs="*", help="use these 2d6 results in order")
+    s.add_argument("--bribe", type=float, help="offer this much; banded by --wealth (ours)")
+    s.add_argument("--wealth", type=float, help="--bribe: the NPC's usual monthly take")
+    s.add_argument("--honest", action="store_true", help="--bribe: any bribe offends")
     s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_negotiate)
     s = sub.add_parser("spell", help="spell cost, or check homebrew spells")
     s.add_argument("action", choices=["cost", "check", "forge"]); s.add_argument("file", nargs="?")
@@ -9257,6 +9712,12 @@ def main(argv=None):
     s.add_argument("--shift", action="store_true", help="day and night occupants per room; rank-gated stairs need a guard")
     s.add_argument("--skip", help="a shortcut door: rooms and awards cut off when it opens first")
     s.add_argument("--rally", help="a foe: fleeing foes join their finale force; min and max")
+    s.add_argument("--force", metavar="DOOR", help="force (or --pick) a door: tries, minutes, a wander roll each")
+    s.add_argument("--pick", action="store_true", help="--force: use the door's lock block, quiet by default")
+    s.add_argument("--bonus", type=int, default=0); s.add_argument("--tries", type=int, default=5)
+    s.add_argument("--chance", type=int, default=6, help="--force: wander 1 in N per try, halved when loud")
+    s.add_argument("--eras", help="visit order of eras, e.g. present,past,future: loot taken once is gone later")
+    s.add_argument("--seed", type=int)
     s.add_argument("file"); s.set_defaults(fn=cmd_rooms)
     s = sub.add_parser("escort", help="escort an NPC along a route: flee and rejoin, patience, survival XP")
     s.add_argument("file"); s.add_argument("name"); s.add_argument("--route", required=True)
@@ -9388,6 +9849,8 @@ def main(argv=None):
     s.add_argument("--lint", action="store_true", help="stronghold defence-as-design findings as GM hooks")
     s.add_argument("--upkeep", action="store_true", help="stronghold staff roster and upkeep/income bands from value")
     s.add_argument("--threats", action="store_true", help="neighbour reactions and why nobody built here before")
+    s.add_argument("--edge", action="store_true", help="areas: a fall-safety item before the first lethal edge")
+    s.add_argument("--ward", action="store_true", help="areas: a warded area needs a non-magical route in")
     s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_site)
     s = sub.add_parser("interrogate", help="check an interrogation ladder: ascending DCs, truth tags, the real story")
@@ -9395,6 +9858,9 @@ def main(argv=None):
     s = sub.add_parser("carry", help="carry-over foes per group between fights")
     s.add_argument("group"); s.add_argument("--start", type=int, help="set the group's size")
     s.add_argument("--killed", type=int, default=0); s.add_argument("--fled", type=int, default=0)
+    s.add_argument("--resources", action="store_true", help="rematch keeps lost HP and spent slots; XP scales")
+    s.add_argument("--hp-lost", type=int, help="percent of the group's HP lost"); s.add_argument("--slots-spent", type=int)
+    s.add_argument("--xp", type=float, help="--resources: full XP of the group")
     s.add_argument("--file", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "carry.json"))
     s.set_defaults(fn=cmd_carry)
     s = sub.add_parser("rumors", help="check a lead list, or {quests, rumors} with quest and true: yes|no|later each")
@@ -9461,6 +9927,8 @@ def main(argv=None):
     s.add_argument("--twists", type=int, help="N typed rival twists: lint them, or roll N types to write")
     s.add_argument("--epilogue", action="store_true", help="epilogue {text, twist} follows from the win")
     s.add_argument("--hook", action="store_true", help="patron selfish motive, a non-combat route, a pc_slot")
+    s.add_argument("--day", action="store_true", help="fight load per day between long rests; three hard in a row")
+    s.add_argument("--cap", type=float, default=DAY_CAP, help="--day: load a party can take (ours)")
     s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_adventure)
     s = sub.add_parser("mastery", help="mastery marks per school: 4 from one trigger kind, the 4th halves the cost")
@@ -9533,6 +10001,34 @@ def main(argv=None):
     s.add_argument("--rotten", action="store_true", help="rotten rock: the chance stays flat")
     s.add_argument("--daily", action="store_true"); s.add_argument("--odds", type=int, default=20, help="--daily: 1 in N")
     s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_collapse)
+    s = sub.add_parser("explore", help="exploring turns: pace, tasks per PC, watch, lost DC")
+    s.add_argument("file"); s.add_argument("--tasks", action="store_true", help="check the task roster (default)")
+    s.add_argument("--lost-dc", type=int, default=15); s.add_argument("--map-cut", type=int, default=5)
+    s.set_defaults(fn=cmd_explore)
+    s = sub.add_parser("stash", help="where a keeper hides valuables")
+    s.add_argument("--count", type=int, default=1); s.add_argument("--magic", type=int, default=10, help="percent warded")
+    s.add_argument("--special", type=int, default=6, help="1 in N a special find"); s.add_argument("--seed", type=int)
+    s.set_defaults(fn=cmd_stash)
+    s = sub.add_parser("shop", help="check shop entries: quarter, keepers, customers, price line, quirk, hook")
+    s.add_argument("file"); s.add_argument("--check", action="store_true", help="check (the default)")
+    s.set_defaults(fn=cmd_shop)
+    s = sub.add_parser("clues", help="clue tiers per fact: known, cheap, costly, never")
+    s.add_argument("file"); s.add_argument("--tiers", action="store_true", help="check tiers (the default)")
+    s.set_defaults(fn=cmd_clues)
+    s = sub.add_parser("repair", help="stacked damage: diagnose, then repair worst first")
+    s.add_argument("--stack", required=True, help="minor,major,destroyed")
+    s.add_argument("--bonus", type=int, default=0); s.add_argument("--tries", type=int, default=3)
+    s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_repair)
+    s = sub.add_parser("hire", help="wage for hired help by skill level (ours)")
+    s.add_argument("--rate", type=int, required=True, help="skill level 0 or more")
+    s.add_argument("--base", type=float, default=2); s.add_argument("--danger", action="store_true")
+    s.add_argument("--days", type=int); s.set_defaults(fn=cmd_hire)
+    s = sub.add_parser("act", help="gate quests: is min_level reachable from the other quests' XP")
+    s.add_argument("file"); s.add_argument("--quests", action="store_true", help="check gates (the default)")
+    s.set_defaults(fn=cmd_act)
+    s = sub.add_parser("pcs", help="per-PC files (secrets, devices, owed, writeout); --drift levels")
+    s.add_argument("file"); s.add_argument("--drift", action="store_true", help="levels against the party median")
+    s.set_defaults(fn=cmd_pcs)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
