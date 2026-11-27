@@ -786,6 +786,8 @@ def load_char(path):
 
 
 def cmd_check(a):
+    if getattr(a, "open_choices", False):
+        return check_open(a)
     if a.haste or a.caution:
         return check_pace(a)
     if a.lint:
@@ -1327,7 +1329,7 @@ def cmd_sessionlog(a):
 NPC_DEPTH = ("ideal", "bond", "flaw")
 NPC_EXTRA = ("major", "secret", "joins_party", "exit", "tactics", "but", "roles", "tell", "revealed",
              "notice", "open", "goals", "recurring", "reacts", "danger", "questions", "survival",
-             "role", "activates", "central")
+             "role", "activates", "central", "kind", "controls", "skim", "aim")
 
 
 def cmd_npcs(a):
@@ -1375,6 +1377,9 @@ def cmd_npcs(a):
             print(f"warn: {name.strip()}: major NPC with {len(roles)} roles:, give 2+ so they stay useful (e.g. roles: fence, informant)")
         if getattr(a, "but", False) and not extra.get("but") and " but " not in f" {' '.join(parts).lower()} ":
             print(f"warn: {name.strip()}: no contradiction; add a 'but' to the look, activity or hook, or a but: field")
+        if extra.get("kind", "").lower() == "official":
+            for w in npc_official(name.strip(), extra):
+                print("warn: " + w)
         if len(parts) != 3 or not all(parts):
             errs.append(f"{name.strip()}: want three parts 'look; doing now; hook because why'")
         elif "because" not in parts[2].lower():
@@ -1940,6 +1945,8 @@ def cmd_safety(a):
     errs, warns = [], []
     if not s.get("cut_call"):
         errs.append("no cut_call: the word that stops a scene at once")
+    if "dice_norms" in s:
+        warns += dice_norms_check(s["dice_norms"], None)
     if not s.get("brake_call"):
         warns.append("no brake_call: the word that slows a scene down")
     dm = s.get("debrief_minutes")
@@ -2617,7 +2624,11 @@ def cmd_review(a):
 def cmd_houserules(a):
     """House rules JSON list: each rule has kind (add, change, remove) and why; removals want an offset."""
     rules = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    norms = None
+    if isinstance(rules, dict):
+        norms, rules = rules.get("dice_norms"), rules.get("rules", [])
     errs, warns = [], []
+    warns += dice_norms_check(norms, rules)
     for r in rules:
         name = r.get("rule") or "?"
         if r.get("kind") not in ("add", "change", "remove"):
@@ -2947,6 +2958,7 @@ def cmd_district(a):
                 warns.append(f"{n}: no {f}")
         if x.get("gate") in (None, ""):
             warns.append(f"{n}: no gate rule (say 'open' if anyone may pass)")
+        warns += district_patrol(x)
         print(f"[{n}] watch {x.get('watch', '?')} | bribe {x.get('bribe', '?')} | gate {x.get('gate', '?')} | "
               f"curfew {x.get('curfew', '?')} | owner {x.get('owner', '?')}")
     if any("neighbours" in x or "neighbors" in x for x in ds):
@@ -3169,6 +3181,8 @@ def cmd_attendance(a):
         print("warn: half or fewer present; consider a side adventure, a one-shot, or moving the session")
     if a.present < n:
         print(f"absent PCs ({a.dynamic}): {ABSENT_PCS[a.dynamic]}")
+    if getattr(a, "roles", False):
+        attendance_roles(pcs, a.session)
 
 
 # 0.12.0: one-shots, TPK triage, dungeon alert, hook backlog, negotiation, navigation. Numbers and wording are ours.
@@ -5324,6 +5338,8 @@ TALK_KINDS = {"trade": "something for something", "bribe": "a gift that buys the
 
 def cmd_talk(a):
     """Petitions: who asks whom for what, the opening leverage, fallbacks and a bottom line."""
+    if getattr(a, "rapport", False):
+        return talk_rapport(a)
     if a.list:
         for k, v in TALK_KINDS.items():
             print(f"{k}: {v}")
@@ -5693,6 +5709,10 @@ def cmd_doomtrack(a):
 
 def cmd_rumors(a):
     """Rumour or lead list JSON: each lead has a skill, a dc, what it reveals and where it points; mixed skills and DCs."""
+    if getattr(a, "venue", None):
+        rumor_venue(a)
+        if not a.file:
+            return
     if a.spread is not None:
         rumor_spread(a)
         if not a.file:
@@ -7945,6 +7965,7 @@ def settlement_justice(c, warns):
             print(f"{j.get('offence', '?')}: {j['sentence']}")
     if guards and not js:
         warns.append("guards but no justice: say what each offence costs (justice [{offence, sentence}])")
+    warns += settlement_courts(c)
 
 
 STRONGHOLD_CONDITIONS = ("ruin", "poor", "worn", "sound", "pristine")
@@ -9290,6 +9311,189 @@ def world_magic(a):
     report(errs, warns, "magic block")
 
 
+# 0.39.0: rulings log, table jobs, open choices, dice norms, venue rumours, rapport, patrol styles, officials,
+# court cards. Ideas from the Slayer's Guide to Rules Lawyers and the JG Guidebook to the City; numbers ours.
+OPEN_WORDS = ("decide later", "tbd", "to be decided", "todo", "not sure", "undecided", "pick later", "??")
+
+
+def open_choices(v, path=""):
+    """Paths whose string value reads as a choice left for later."""
+    out = []
+    if isinstance(v, dict):
+        for k, x in v.items():
+            out += open_choices(x, f"{path}.{k}" if path else str(k))
+    elif isinstance(v, list):
+        for i, x in enumerate(v):
+            out += open_choices(x, f"{path}[{i}]")
+    elif isinstance(v, str):
+        t = v.strip().lower()
+        if t in ("?", "") and path:
+            out.append((path, v))
+        elif any(w in t for w in OPEN_WORDS):
+            out.append((path, v))
+    return out
+
+
+def check_open(a):
+    if not a.character:
+        die("check CHARACTER.json --open-choices")
+    c = load_json(a.character)
+    found = open_choices(c)
+    warns = [f"{p}: {v!r} left open; settle it before play so it is not chosen mid-fight" for p, v in found]
+    report([], warns, f"{c.get('name', 'character')}: {len(found)} open choice(s)")
+
+
+DICE_NORMS = ("in_view", "cocked", "ambiguous")
+
+
+def dice_norms_check(norms, rules):
+    """Warn when house rules exist with no dice_norms, or a norm is missing."""
+    if not norms:
+        return ["house rules with no dice_norms (in_view, cocked, ambiguous): say how rolls count before a dispute"] if rules else []
+    if not isinstance(norms, dict):
+        return ["dice_norms wants {in_view, cocked, ambiguous}"]
+    return [f"dice_norms: no {k}" for k in DICE_NORMS if not norms.get(k)]
+
+
+ROLE_MARSHAL = "rules marshal (initiative order, conditions, encumbrance)"
+ROLE_JOBS = ("map keeper", "note taker", "loot and coin", "snacks and timekeeping")
+
+
+def attendance_roles(pcs, session):
+    """Rules marshal plus rotating jobs; each session shifts everyone one job along."""
+    jobs = [ROLE_MARSHAL] + list(ROLE_JOBS)
+    n = len(pcs)
+    print(f"table jobs, session {session}:")
+    for i, job in enumerate(jobs[:max(n, 1)]):
+        print(f"  {job}: {pcs[(i + session - 1) % n]}")
+    for job in jobs[n:]:
+        print(f"  {job}: GM (more jobs than players)")
+
+
+RUMOR_VENUE = {"eatery": 0.5, "inn": 1.0, "tavern": 3.0}  # rumours an hour, rounded from the JG city guide
+RUMOR_VENUE_TRUE = 0.5
+
+
+def rumor_venue(a):
+    import random
+    rng = random.Random(a.seed)
+    rate = RUMOR_VENUE[a.venue]
+    total = 0
+    for h in range(1, int(math.ceil(a.hours)) + 1):
+        span = min(1.0, a.hours - (h - 1))
+        exp = rate * span
+        k = int(exp) + (1 if rng.random() < exp - int(exp) else 0)
+        total += k
+        heard = ["true" if rng.random() < RUMOR_VENUE_TRUE else "false" for _ in range(k)]
+        print(f"hour {h}: {k} rumour(s)" + (" (" + ", ".join(heard) + ")" if heard else ""))
+    print(f"{a.venue}: about {rate:g} an hour, expect {rate * a.hours:g} in {a.hours:g} h, heard {total}; about half true")
+
+
+RAPPORT = [("stranger", "neutral", "nothing yet"),
+           ("acquaintance", "open", "spend coin or time with them (buy a meal, a round, a purchase)"),
+           ("friend", "open", "do them a favour or keep a promise"),
+           ("confidant", "helpful", "share a risk or a secret with them"),
+           ("ally", "helpful", "stand by them at a cost (back them in trouble)")]
+RAPPORT_ACTS = {"coin": 1, "favour": 2, "favor": 2, "promise": 2, "secret": 3, "risk": 3, "cost": 4, "stand": 4}
+
+
+def talk_rapport(a):
+    """Four steps up from stranger, each earned by a concrete act in order; maps to negotiate --start."""
+    acts = [x.strip().lower() for x in (a.acts or "").split(",") if x.strip()]
+    step, warns = 0, []
+    for x in acts:
+        if x not in RAPPORT_ACTS:
+            die(f"act {x!r}, use " + ", ".join(RAPPORT_ACTS))
+        need = RAPPORT_ACTS[x]
+        if need == step + 1:
+            step = need
+        elif need > step + 1:
+            warns.append(f"{x} skips a step (at {RAPPORT[step][0]}); it counts once the steps below are earned")
+        else:
+            print(f"{x}: already at {RAPPORT[step][0]}, keeps the step")
+    for i, (name, att, act) in enumerate(RAPPORT):
+        mark = "*" if i == step else " "
+        print(f"{mark} {i} {name} (negotiate --start {att}): {act if i else 'start here'}")
+    for w in warns:
+        print("warn: " + w)
+    print(f"rapport: {RAPPORT[step][0]}; use negotiate --start {RAPPORT[step][1]}")
+
+
+PATROL_STYLES = ("heavy-handed", "biased", "hands-off", "eccentric")
+
+
+def district_patrol(x):
+    n = x.get("name") or "?"
+    if x.get("watch") in (None, ""):
+        return []
+    ps = str(x.get("patrol_style") or "").lower()
+    if not ps:
+        return [f"{n}: watch with no patrol_style ({', '.join(PATROL_STYLES)}): how the watch treats people"]
+    if ps not in PATROL_STYLES:
+        return [f"{n}: patrol_style {ps!r}, use " + ", ".join(PATROL_STYLES)]
+    return []
+
+
+def npc_official(name, extra):
+    w = []
+    if not extra.get("controls"):
+        w.append(f"{name}: official with no controls: (the permit, licence or levy they grant or collect)")
+    if not (extra.get("skim") or extra.get("aim")):
+        w.append(f"{name}: official with no skim: or aim: (what they take on the side, or what they really want)")
+    return w
+
+
+COURT_SPEED = ("swift", "steady", "slow")
+COURT_PREDICT = ("strict", "fair", "erratic", "bought")
+
+
+def settlement_courts(c):
+    """courts [{case, judge, speed, predictability, tip}]: who hears what, how fast, how sure, how to behave."""
+    warns = []
+    cs = c.get("courts") or []
+    if c.get("justice") and not cs:
+        warns.append("justice but no courts: name a judge per case type (courts [{case, judge, speed, predictability, tip}])")
+    for x in cs:
+        n = x.get("case") or "?"
+        for k in ("judge", "speed", "predictability", "tip"):
+            if not x.get(k):
+                warns.append(f"court {n}: no {k}")
+        if x.get("speed") and x["speed"] not in COURT_SPEED:
+            warns.append(f"court {n}: speed {x['speed']!r}, use " + ", ".join(COURT_SPEED))
+        if x.get("predictability") and x["predictability"] not in COURT_PREDICT:
+            warns.append(f"court {n}: predictability {x['predictability']!r}, use " + ", ".join(COURT_PREDICT))
+        print(f"court {n}: {x.get('judge', '?')} | {x.get('speed', '?')} | {x.get('predictability', '?')} | "
+              f"tip: {x.get('tip', '?')}")
+    return warns
+
+
+def cmd_rulings(a):
+    """Append-only ruling log (JSON list in TABLEWRIGHT_HOME): add one, list, --revisit, --find."""
+    import datetime
+    f = Path(a.file)
+    log = json.loads(f.read_text(encoding="utf-8")) if f.exists() else []
+    if a.action == "add":
+        if not a.question or not a.call:
+            die("rulings add --question Q --call C [--source S] [--revisit]")
+        e = {"date": a.date or datetime.date.today().isoformat(), "question": a.question, "call": a.call,
+             "source": a.source or "", "revisit": bool(a.revisit)}
+        log.append(e)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes((json.dumps(log, indent=1) + "\n").encode("utf-8"))
+        print(f"ruling {len(log)} logged" + ("" if e["source"] else "; warn: no source (page or rule it rests on)"))
+        return
+    rows = list(enumerate(log, 1))
+    if a.revisit:
+        rows = [(i, e) for i, e in rows if e.get("revisit")]
+    if a.find:
+        t = a.find.lower()
+        rows = [(i, e) for i, e in rows if t in (e.get("question", "") + " " + e.get("call", "") + " " + e.get("source", "")).lower()]
+    for i, e in rows:
+        print(f"{i}. {e.get('date', '?')} {e.get('question', '')} -> {e.get('call', '')}"
+              + (f" [{e['source']}]" if e.get("source") else "") + (" (revisit)" if e.get("revisit") else ""))
+    print(f"{len(rows)} of {len(log)} ruling(s)")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -9372,6 +9576,7 @@ def main(argv=None):
     s.add_argument("--haste", action="store_true", help="half the time, DC +4 (ours): odds against normal")
     s.add_argument("--caution", action="store_true", help="double the time, DC -4 (ours): odds against normal")
     s.add_argument("--time", type=float, default=10, help="--haste/--caution: normal minutes")
+    s.add_argument("--open-choices", action="store_true", help="warn on fields left 'decide later' or TBD")
     s.set_defaults(fn=cmd_check)
     s = sub.add_parser("prep", help="check a session prep card")
     s.add_argument("card"); s.add_argument("--leads", type=int, default=3)
@@ -9560,6 +9765,8 @@ def main(argv=None):
     s.add_argument("file"); s.set_defaults(fn=cmd_cascade)
     s = sub.add_parser("talk", help="check petitions: leverage, fallbacks, bottom line")
     s.add_argument("file", nargs="?"); s.add_argument("--list", action="store_true", help="print the leverage kinds")
+    s.add_argument("--rapport", action="store_true", help="four-step rapport ladder; maps to negotiate --start")
+    s.add_argument("--acts", help="--rapport: acts done in order (coin,favour,promise,secret,risk,cost,stand)")
     s.set_defaults(fn=cmd_talk)
     s = sub.add_parser("islands", help="check floating prep islands, or move one")
     s.add_argument("args", nargs="+", help="FILE, or move FILE NAME"); s.add_argument("--to")
@@ -9597,6 +9804,8 @@ def main(argv=None):
     s = sub.add_parser("attendance", help="who came and what to do with absent PCs")
     s.add_argument("roster"); s.add_argument("--present", type=int, required=True)
     s.add_argument("--dynamic", choices=list(ABSENT_PCS), default="collective")
+    s.add_argument("--roles", action="store_true", help="rules marshal plus table jobs, rotating by --session")
+    s.add_argument("--session", type=int, default=1)
     s.set_defaults(fn=cmd_attendance)
     s = sub.add_parser("trap", help="check traps: trigger, detection, disable, effect, severity")
     s.add_argument("file"); s.add_argument("--full", action="store_true", help="also want avoid, reset and alarm")
@@ -9870,6 +10079,8 @@ def main(argv=None):
     s.add_argument("--rate", type=float, default=NEWS_RATE, help="--spread: blocks an hour (ours)")
     s.add_argument("--truth", action="store_true", help="true rumours a small minority, some partial")
     s.add_argument("--max-true", type=float, default=RUMOR_TRUE_MAX, help="--truth: highest share of true rumours")
+    s.add_argument("--venue", choices=list(RUMOR_VENUE), help="rumours heard per hour at this venue")
+    s.add_argument("--hours", type=float, default=1); s.add_argument("--seed", type=int)
     s = sub.add_parser("triggers", help="check IF/THEN triggers: bound or unbound, a visible result each")
     s.add_argument("file"); s.set_defaults(fn=cmd_triggers)
     s = sub.add_parser("guild", help="check guild quest-board cards: where, how far, contact, proof, voucher, rank")
@@ -10029,6 +10240,13 @@ def main(argv=None):
     s = sub.add_parser("pcs", help="per-PC files (secrets, devices, owed, writeout); --drift levels")
     s.add_argument("file"); s.add_argument("--drift", action="store_true", help="levels against the party median")
     s.set_defaults(fn=cmd_pcs)
+    s = sub.add_parser("rulings", help="append-only ruling log: add, list, --revisit, --find")
+    s.add_argument("action", nargs="?", choices=["add", "list"], default="list")
+    s.add_argument("--question"); s.add_argument("--call"); s.add_argument("--source"); s.add_argument("--date")
+    s.add_argument("--revisit", action="store_true", help="add: flag for review; list: only flagged")
+    s.add_argument("--find", help="list rulings mentioning this")
+    s.add_argument("--file", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "rulings.json"))
+    s.set_defaults(fn=cmd_rulings)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
