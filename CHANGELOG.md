@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.39.0 (2026-11-27)
+- `rulings [add|list] [--revisit] [--find TERM]`: a new command; append-only ruling log in TABLEWRIGHT_HOME (date, question, call, source, revisit flag). Idea inspired by the Slayer's Guide to Rules Lawyers.
+- `attendance --roles [--session N]`: a rules marshal (initiative, conditions, encumbrance) plus table jobs that rotate one seat each session. Idea inspired by the Slayer's Guide to Rules Lawyers.
+- `check CHAR --open-choices`: warns on fields left "decide later", TBD or "?". Idea inspired by the Slayer's Guide to Rules Lawyers.
+- `houserules` accepts {rules, dice_norms}; warns when rules exist with no dice_norms (in_view, cocked, ambiguous) or one is missing; `safety` checks dice_norms when present. Idea inspired by the Slayer's Guide to Rules Lawyers.
+- `rumors --venue eatery|inn|tavern --hours N [--seed S]`: rumours heard each hour (about 0.5, 1 and 3), each about half true. Idea inspired by the JG Guidebook to the City.
+- `talk --rapport --acts a,b`: four steps up from stranger, each earned by a concrete act in order, mapped to a `negotiate --start` attitude so the two ladders stay one system. Idea inspired by the JG Guidebook to the City.
+- `district`: a card with a watch and no `patrol_style` (heavy-handed, biased, hands-off, eccentric) warns. Idea inspired by the JG Guidebook to the City.
+- `npcs`: `kind: official` wants `controls:` (permit or levy) and `skim:` or `aim:`. Idea inspired by the JG Guidebook to the City.
+- `settlement --justice`: `courts` [{case, judge, speed, predictability, tip}] court cards; justice with no courts warns. Idea inspired by the JG Guidebook to the City.
+
 ## 0.38.0 (2026-11-27)
 - `adventure --day [--cap 12]`: fight load per day between long rests (easy 1 to deadly 4), warns over the cap, under a third of it, and on three hard or deadly fights in a row. Idea inspired by the D&D 5e prerelease DM Guidelines.
 - `explore FILE --tasks`: a new command; per-turn task roster (watch, map, navigate, sneak, forage); fast pace allows none, two tasks give disadvantage, sneaking needs slow, no watch misses hidden things, mapping cuts the lost DC. Idea inspired by the D&D 5e prerelease DM Guidelines.
