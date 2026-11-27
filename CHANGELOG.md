@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.40.0 (2026-11-27)
+- `realm --check`: header fields (ruler title, capital, population, main_population, minorities, exports, militia_arms, standing_force, backers or threats); minority bands many (25%), some (15%), few (5%) with a share ceiling; an undefined band is an error. Idea inspired by the Guide to the World of Greyhawk.
+- `realm`: a `patron` must name `pays` and `if_stops`. Idea inspired by the Guide to the World of Greyhawk.
+- `habitation --terrain fertile|rough|harsh --area N`: a new command; about one holding per 100 sq leagues of fertile land, half that in rough and a quarter in harsh, where a share of them are robber forts. Idea inspired by the Guide to the World of Greyhawk.
+- `table`: route or water rows (where/terrain or trader, raider, ship kinds) with no `origin` warn. Idea inspired by the Guide to the World of Greyhawk.
+- `site`: a castle (`castle: true` or kind castle, keep, fort) wants `castle_kind` (ruler seat, vassal seat, border fort, bandit hold). Idea inspired by the Guide to the World of Greyhawk.
+- `villain --scheme`: motive as emotion plus the event behind it, a non-evil `side_goal`, 3+ `step:` lines each with `interrupt:`, `if_wins:`, 2+ `stop:`; a lumped `followers:` warns to split into hireling, henchman, lackey. Idea inspired by the Villain Design Handbook.
+- `street --district D --time T [--season S] [--seed N]`: a new command; d4 adjusted by time, season and district, then one roll takes a run of rows; night-only rows sit last and appear only at dusk or night. Idea inspired by the FR City System.
+- `pockets --who OCC --district rich|common|rough [--seed N]`: a new command; 1 to 6 items by district wealth, mostly mundane, a few valuables, one red-herring note row and one anti-thief trap row. Idea inspired by the FR City System.
+- `building --district D [--seed N] [--promote WHY --ledger F]`: a new command; class by district weight, then storeys, then use; `--promote` gives it the next number in a side ledger. Idea inspired by the FR City System.
+- `district`: recurring `street_bits` (city or district level), 3 to 6 per city, each with `hidden` and `if_harmed`. Idea inspired by the FR City System.
+- Nothing in the list was already built. All tables, numbers and words are ours. 10 new tests.
+
 ## 0.39.0 (2026-11-27)
 - `rulings [add|list] [--revisit] [--find TERM]`: a new command; append-only ruling log in TABLEWRIGHT_HOME (date, question, call, source, revisit flag). Idea inspired by the Slayer's Guide to Rules Lawyers.
 - `attendance --roles [--session N]`: a rules marshal (initiative, conditions, encumbrance) plus table jobs that rotate one seat each session. Idea inspired by the Slayer's Guide to Rules Lawyers.

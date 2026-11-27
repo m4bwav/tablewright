@@ -1589,6 +1589,8 @@ def cmd_villain(a):
                 warns.append(f"{name}: {len(meets)} meet: lines before the showdown, want 3+ so the villain is known before the fight")
         if key("where") and len(where) < 2:
             warns.append(f"{name}: met in one place only; give two or more (where: a, b) so a missed scene is not a lost villain")
+        if a.scheme:
+            villain_scheme(name, lines, key, warns)
     if not sec:
         die("no '## Name' villain sections")
     villain_clues(sec, a.clues, warns, errs)
@@ -2124,6 +2126,7 @@ def cmd_table(a):
             warns.append(f"side values {bad}; use party, residents or both")
         if not {"residents", "both"} & set(sides):
             warns.append("no row is residents or both; wanderers never trouble the dungeon's own dwellers")
+    table_origins(rows, warns)
     share = fights / top if top else 0
     if share > a.max_fight:
         warns.append(f"fights fill {share:.0%} of the table, over {a.max_fight:.0%}; travel should be mostly other things")
@@ -2945,7 +2948,7 @@ DISTRICT_FIELDS = ("watch", "bribe", "curfew", "owner")
 
 def cmd_district(a):
     """City district cards JSON list: watch strength, bribe cost, gate and curfew rules, who holds the block."""
-    ds = json.loads(Path(a.file).read_text(encoding="utf-8"))
+    ds = raw = json.loads(Path(a.file).read_text(encoding="utf-8"))
     if isinstance(ds, dict):
         ds = ds.get("districts", [])
     if not ds:
@@ -2965,6 +2968,7 @@ def cmd_district(a):
         warns += district_neighbours(ds)
     if getattr(a, "visit", None):
         warns += district_visit(ds, a.visit)
+    warns += district_bits(raw, ds)
     report([], warns, f"{len(ds)} district card(s)")
 
 
@@ -5636,6 +5640,9 @@ def cmd_realm(a):
         realm_government(d, errs, warns)
     if a.grant:
         realm_grants(d, errs, warns)
+    if a.check:
+        realm_header(d, errs, warns)
+    realm_patron(d, errs)
     if a.strict:
         errs, warns = errs + warns, []
     report(errs, warns, f"realm with {len(places)} places")
@@ -6105,6 +6112,7 @@ def cmd_site(a):
         site_snitch(d, warns)
     prior_party_check(d.get("prior_party"), "site", warns)
     site_factions(d, warns)
+    site_castle(d, warns)
     if a.food:
         site_food(d, a, warns)
     if a.purpose:
@@ -9494,6 +9502,253 @@ def cmd_rulings(a):
     print(f"{len(rows)} of {len(log)} ruling(s)")
 
 
+# 0.40.0: realm header, habitation, route origins, castle kinds, villain schemes, street, pockets, building,
+# district street bits. Ideas from the Guide to the World of Greyhawk, the Villain Design Handbook and the
+# FR City System. Every table, number and word below is ours.
+REALM_HEADER = (("ruler.title", "the ruler's title"), ("capital", "the seat of rule"),
+                ("population", "a head count or band"), ("main_population", "who most people are"),
+                ("minorities", "friendly and hostile minorities"), ("exports", "what leaves the realm"),
+                ("militia_arms", "what the levy carries"), ("standing_force", "the paid troops"))
+MINORITY_BANDS = {"many": 0.25, "some": 0.15, "few": 0.05}  # share ceilings; ours
+
+
+def realm_header(d, errs, warns):
+    """Header fields, minority bands with share ceilings, backers or threats."""
+    for k, why in REALM_HEADER:
+        top, _, sub_ = k.partition(".")
+        v = (d.get(top) or {}).get(sub_) if sub_ else d.get(top)
+        if v in (None, "", [], {}):
+            warns.append(f"no {k} ({why})")
+    if not (d.get("backers") or d.get("threats")):
+        warns.append("no backers or threats (who props the realm up or wants it gone)")
+    mins = d.get("minorities") or []
+    att = set()
+    for m in mins:
+        n, band = m.get("name", "?"), str(m.get("band", "")).lower()
+        if band not in MINORITY_BANDS:
+            errs.append(f"minority {n}: band {m.get('band')!r} undefined; use " +
+                        ", ".join(f"{b} (up to {c:.0%})" for b, c in MINORITY_BANDS.items()))
+        elif isinstance(m.get("share"), (int, float)) and m["share"] > MINORITY_BANDS[band]:
+            warns.append(f"minority {n}: share {m['share']:.0%} is over the {band} ceiling {MINORITY_BANDS[band]:.0%}")
+        att.add(str(m.get("attitude", "")).lower())
+    if mins:
+        for want in ("friendly", "hostile"):
+            if want not in att:
+                warns.append(f"no {want} minority (attitude: {want})")
+
+
+def realm_patron(d, errs):
+    p = d.get("patron")
+    if not p:
+        return
+    p = p if isinstance(p, dict) else {"name": p}
+    for k, why in (("pays", "what the patron pays"), ("if_stops", "what happens if the payment stops")):
+        if not p.get(k):
+            errs.append(f"patron {p.get('name', '?')}: no {k} ({why})")
+
+
+HABITATION_RATE = {"fertile": 1.0, "rough": 0.5, "harsh": 0.25}  # holdings per 100 sq leagues; ours
+HABITATION_ROBBER = {"fertile": 0.0, "rough": 0.25, "harsh": 0.5}  # share of holdings that are robber forts; ours
+
+
+def cmd_habitation(a):
+    """Expected settlements and strongholds in a blank area; leftovers in rough or harsh land are robber forts."""
+    if a.area <= 0:
+        die("--area must be above 0 (square leagues)")
+    n = a.area / 100 * HABITATION_RATE[a.terrain]
+    total = round(n)
+    robbers = round(total * HABITATION_ROBBER[a.terrain])
+    print(f"{a.terrain} land, {a.area:g} sq leagues: about {n:.1f} holdings, place {total}")
+    print(f"  settlements or lords' strongholds: {total - robbers}")
+    print(f"  robber forts (the leftovers): {robbers}")
+    if total == 0:
+        print("  none expected; one lone holding here is a story in itself")
+
+
+ROUTE_WORDS = ("route", "road", "water", "sea", "river", "coast", "lake")
+ROUTE_KINDS = ("trader", "merchant", "raider", "pirate", "caravan", "ship", "smuggler", "pilgrim")
+
+
+def table_origins(rows, warns):
+    """Route or water rows of travellers should name where they came from (origin column)."""
+    bare = []
+    for r in rows:
+        where = " ".join(str(r.get(k) or "") for k in ("where", "terrain")).lower()
+        kind = " ".join(str(r.get(k) or "") for k in ("kind", "result", "name")).lower()
+        if any(w in where for w in ROUTE_WORDS) or any(w in kind for w in ROUTE_KINDS):
+            if not (r.get("origin") or "").strip():
+                bare.append(r.get("roll", "?"))
+    if bare:
+        warns.append(f"route or water rows {', '.join(bare)} have no origin (traders between named ports, raiders "
+                     "from a named base)")
+
+
+CASTLE_KINDS = ("ruler seat", "vassal seat", "border fort", "bandit hold")
+
+
+def site_castle(d, warns):
+    if not (d.get("castle") or str(d.get("kind", "")).lower() in ("castle", "keep", "fort", "stronghold")):
+        return
+    k = str(d.get("castle_kind", "")).lower()
+    if not k:
+        warns.append("castle with no castle_kind (" + ", ".join(CASTLE_KINDS) + ")")
+    elif k not in CASTLE_KINDS:
+        warns.append(f"castle_kind {k!r}; use " + ", ".join(CASTLE_KINDS))
+
+
+SCHEME_EMOTIONS = ("anger", "envy", "fear", "grief", "greed", "hate", "jealousy", "love", "pride", "shame",
+                   "spite", "despair", "ambition", "revenge", "humiliation", "loneliness")
+FOLLOWER_TIERS = ("hireling", "henchman", "lackey")
+
+
+def villain_scheme(name, lines, key, warns):
+    """Motive (emotion and event), a non-evil side goal, 3+ steps with interrupts, if_wins, 2+ ways to stop it."""
+    mot = " ".join(key("motive")).lower()
+    if not mot:
+        warns.append(f"{name}: no motive: (an emotion plus the event behind it)")
+    elif not any(e in mot for e in SCHEME_EMOTIONS) or " because " not in f" {mot} ":
+        warns.append(f"{name}: motive wants an emotion and the event behind it ('envy because ...')")
+    side = key("side_goal")
+    if not side:
+        warns.append(f"{name}: no side_goal: (something they want that is not evil)")
+    steps = [x for x in key("step")]
+    if len(steps) < 3:
+        warns.append(f"{name}: {len(steps)} step: lines, want 3+ ordered method steps")
+    for i, st in enumerate(steps, 1):
+        if "interrupt:" not in st.lower():
+            warns.append(f"{name}: step {i} has no interrupt: (where the party can break in)")
+    if not key("if_wins"):
+        warns.append(f"{name}: no if_wins: (what the world looks like if the plan works)")
+    stops = key("stop")
+    if len(stops) < 2:
+        warns.append(f"{name}: {len(stops)} stop: line(s); a plan with one way to stop it is a railroad, give 2+")
+    if key("followers"):
+        warns.append(f"{name}: followers: is one lump; split into hireling:, henchman:, lackey:")
+    tiers = {t: len(key(t)) for t in FOLLOWER_TIERS}
+    print(f"[{name}] steps {len(steps)}, stops {len(stops)}, " + ", ".join(f"{t}s {n}" for t, n in tiers.items()))
+
+
+# Street table (ours): (who, night_only). Night rows sit last so a run reaches them only late in the list.
+STREET_ROWS = [("a porter bent under a crate", False), ("two children chasing a hoop", False),
+               ("a hawker crying hot pies", False), ("a clerk late for the counting house", False),
+               ("a priest collecting alms", False), ("a watch pair on their round", False),
+               ("a cart driver swearing at a mule", False), ("a laundress with a full basket", False),
+               ("a beggar with a painted sign", False), ("a courier running with a sealed tube", False),
+               ("a drunk singing off key", True), ("a lamplighter with a long pole", True),
+               ("a cloaked figure who will not meet your eye", True), ("a cutpurse working the shadows", True)]
+STREET_TIME = {"dawn": -1, "day": 1, "dusk": 0, "night": -2}
+STREET_SEASON = {"spring": 0, "summer": 1, "autumn": 0, "winter": -1}
+STREET_DISTRICT = {"market": 2, "docks": 1, "slum": 1, "temple": 0, "residential": 0, "noble": -1, "warehouse": -1}
+
+
+def cmd_street(a):
+    """Who is around you: d4 plus time, season and district, then one roll takes a run of rows."""
+    import random
+    rng = random.Random(a.seed)
+    d4 = rng.randint(1, 4)
+    n = max(0, d4 + STREET_TIME[a.time] + STREET_SEASON.get(a.season, 0) + STREET_DISTRICT[a.district])
+    rows = [r for r in STREET_ROWS if a.time in ("night", "dusk") or not r[1]]
+    print(f"{a.district}, {a.time}" + (f", {a.season}" if a.season else "") + f": d4 {d4} -> {n} around you")
+    if not n:
+        print("  the street is empty")
+        return
+    start = rng.randint(1, len(rows))
+    for i in range(min(n, len(rows))):
+        who, night = rows[(start - 1 + i) % len(rows)]
+        print(f"  {(start - 1 + i) % len(rows) + 1}. {who}" + (" (night)" if night else ""))
+
+
+POCKET_COUNT = {"rich": (3, 6), "common": (2, 5), "rough": (1, 4)}  # item range per district; ours
+POCKET_MUNDANE = ["a stub of candle", "a bone comb", "a twist of tobacco", "a dented tin cup", "a ball of twine",
+                  "a crust of bread in a cloth", "a cheap wooden die", "a bent nail", "a lucky pebble",
+                  "a scrap of chalk", "a pair of worn gloves", "a small knife for fruit"]
+POCKET_VALUE = {"rich": ["a silver ring", "a purse of gold", "a pearl stud"],
+                "common": ["a few silver coins", "a brass locket", "a good steel razor"],
+                "rough": ["a single silver coin", "a stolen spoon", "a copper bracelet"]}
+POCKET_NOTE = "a folded note naming a meeting that never happens (a red herring)"
+POCKET_TRAP = "a purse sewn with fish hooks inside (an anti-thief trap: the hand that reaches in bleeds)"
+
+
+def cmd_pockets(a):
+    """1-6 carried items by district wealth: mostly mundane, a few valuables, one note row, one trap row."""
+    import random
+    rng = random.Random(a.seed)
+    lo, hi = POCKET_COUNT[a.district]
+    n = rng.randint(lo, hi)
+    print(f"{a.who} ({a.district} district): {n} item(s)")
+    for _ in range(n):
+        r = rng.randint(1, 20)
+        if r <= 14:
+            item = rng.choice(POCKET_MUNDANE)
+        elif r <= 18:
+            item = rng.choice(POCKET_VALUE[a.district])
+        elif r == 19:
+            item = POCKET_NOTE
+        else:
+            item = POCKET_TRAP
+        print(f"  d20 {r:>2}: {item}")
+
+
+BUILDING_CLASS = {  # weights per district; ours
+    "market": {"shop": 5, "workshop": 2, "house": 2, "warehouse": 1, "hall": 1},
+    "docks": {"warehouse": 5, "workshop": 2, "hovel": 2, "shop": 1, "hall": 1},
+    "slum": {"hovel": 6, "house": 2, "workshop": 1, "shop": 1},
+    "noble": {"manor": 4, "house": 3, "temple": 1, "hall": 1},
+    "temple": {"temple": 4, "house": 2, "shop": 1, "hall": 1},
+    "residential": {"house": 6, "shop": 2, "workshop": 1, "hovel": 1},
+}
+BUILDING_STOREYS = {"hovel": (1, 1), "house": (1, 3), "shop": (1, 3), "workshop": (1, 2), "warehouse": (1, 3),
+                    "hall": (1, 2), "manor": (2, 4), "temple": (1, 3)}
+BUILDING_USE = {"hovel": ["family home", "squat", "fence's drop"], "house": ["family home", "boarding house", "doctor"],
+                "shop": ["baker", "chandler", "cloth seller", "pawnbroker"],
+                "workshop": ["smith", "cooper", "dyer", "bookbinder"],
+                "warehouse": ["grain store", "bonded goods", "empty and for rent"],
+                "hall": ["guild hall", "tavern", "meeting house"], "manor": ["town house", "merchant prince", "shut up"],
+                "temple": ["shrine", "chapel", "almshouse"]}
+
+
+def cmd_building(a):
+    """Building class by district weight, then storeys, then use; --promote numbers it in a side ledger."""
+    import random
+    rng = random.Random(a.seed)
+    w = BUILDING_CLASS[a.district]
+    kind = rng.choices(list(w), weights=list(w.values()))[0]
+    lo, hi = BUILDING_STOREYS[kind]
+    st = rng.randint(lo, hi)
+    use = rng.choice(BUILDING_USE[kind])
+    line = f"{kind}, {st} storey{'s' if st > 1 else ''}, {use}"
+    print(f"{a.district}: {line}")
+    if a.promote:
+        f = Path(a.ledger)
+        led = json.loads(f.read_bytes()) if f.exists() else []
+        num = max((x.get("n", 0) for x in led), default=0) + 1
+        led.append({"n": num, "district": a.district, "building": line, "note": a.promote})
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes((json.dumps(led, indent=1) + "\n").encode("utf-8"))
+        print(f"promoted: building {num} in {f}")
+
+
+STREET_BITS = (3, 6)  # recurring street bits per city; ours
+
+
+def district_bits(d, ds):
+    """Recurring street bits: 3-6 per city, each with hidden and if_harmed."""
+    bits = list((d.get("street_bits") or []) if isinstance(d, dict) else [])
+    for x in ds:
+        bits += x.get("street_bits") or []
+    if not bits and not (isinstance(d, dict) and "street_bits" in d) and not any("street_bits" in x for x in ds):
+        return []
+    warns = []
+    lo, hi = STREET_BITS
+    if not lo <= len(bits) <= hi:
+        warns.append(f"{len(bits)} street bits in the city, want {lo} to {hi}")
+    for b in bits:
+        for k, why in (("hidden", "what is really going on"), ("if_harmed", "what happens if the party harms it")):
+            if not b.get(k):
+                warns.append(f"street bit {b.get('name', '?')}: no {k} ({why})")
+    return warns
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -9647,6 +9902,7 @@ def main(argv=None):
     s = sub.add_parser("villain", help="check villain cards")
     s.add_argument("card"); s.add_argument("--escapes", action="store_true", help="warn when an escape method repeats")
     s.add_argument("--clues", help="clues JSON [{points_to, reveals}]: counts clues pointing at each villain")
+    s.add_argument("--scheme", action="store_true", help="motive, side_goal, 3+ step: with interrupt:, if_wins:, 2+ stop:")
     s.set_defaults(fn=cmd_villain)
     s = sub.add_parser("twist", help="check a set of planned twists")
     s.add_argument("twists"); s.add_argument("--prophecy", action="store_true", help="the file is prophecies: if/when, goal, symbols")
@@ -10028,6 +10284,7 @@ def main(argv=None):
     s.add_argument("--government", action="store_true", help="government type, how power was gained, title ladder")
     s.add_argument("--grant", action="store_true", help="land reward cards: owner, yield, service, opt_out")
     s.add_argument("--changing-times", action="store_true", help="template lint, tension clock with a sign, jurisdiction")
+    s.add_argument("--check", action="store_true", help="header fields, minority bands (many, some, few), backers or threats")
     s.set_defaults(fn=cmd_realm)
     s = sub.add_parser("doomtrack", help="check a doom track: spaces with events, scene costs, outcomes per solved paths")
     s.add_argument("file", nargs="?")
@@ -10247,6 +10504,24 @@ def main(argv=None):
     s.add_argument("--find", help="list rulings mentioning this")
     s.add_argument("--file", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "rulings.json"))
     s.set_defaults(fn=cmd_rulings)
+    s = sub.add_parser("habitation", help="expected settlements and strongholds in a blank area")
+    s.add_argument("--terrain", choices=list(HABITATION_RATE), required=True)
+    s.add_argument("--area", type=float, required=True, help="square leagues")
+    s.set_defaults(fn=cmd_habitation)
+    s = sub.add_parser("street", help="who is around you on a city street")
+    s.add_argument("--district", choices=list(STREET_DISTRICT), required=True)
+    s.add_argument("--time", choices=list(STREET_TIME), required=True)
+    s.add_argument("--season", choices=list(STREET_SEASON)); s.add_argument("--seed", type=int)
+    s.set_defaults(fn=cmd_street)
+    s = sub.add_parser("pockets", help="what someone carries, by district wealth")
+    s.add_argument("--who", required=True, help="occupation")
+    s.add_argument("--district", choices=list(POCKET_COUNT), required=True); s.add_argument("--seed", type=int)
+    s.set_defaults(fn=cmd_pockets)
+    s = sub.add_parser("building", help="a building: class by district, storeys, use; --promote to a ledger")
+    s.add_argument("--district", choices=list(BUILDING_CLASS), required=True); s.add_argument("--seed", type=int)
+    s.add_argument("--promote", help="why this building matters; numbers it in the ledger")
+    s.add_argument("--ledger", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "buildings.json"))
+    s.set_defaults(fn=cmd_building)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
