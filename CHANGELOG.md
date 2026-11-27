@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.36.0 (2026-11-26)
+- `weather --days N [--band ..] [--view gm|player]`: one step of daily drift at most inside a region and season band; each extra day stuck at an edge pushes harder back toward the middle; a gust peak, then half that wind the rest of the day; the player view hides rolls and numbers. Merged into `weather` (its file is optional with `--days`). Idea inspired by the Wilderness Survival Guide.
+- `travel --navigate N --navigators K`: merged into the existing `--navigate`; a secret roll per navigator a day, a failure veers 90 degrees, the worst roll failed by 5+ reverses, and differing calls print a disagreement for the players to settle. Moon and dark light make it harder. Idea inspired by the Wilderness Survival Guide.
+- `travel --light day|moon|dark --obscure fog|snow|blizzard|dust [--push]`: a speed fraction applied last; pushing doubles it at most and costs an obstacle check an hour. Idea inspired by the Wilderness Survival Guide.
+- `forage --spoil`: a second roll per find (poisonous, spoiled, filler, good); skill adds safety, not finds. Idea inspired by the Wilderness Survival Guide.
+- `rest --sleep-log h1,h2,..`: no penalty until the second short night running, the run's average sets it, one full night clears it. Idea inspired by the Wilderness Survival Guide.
+- `air`: a new command; a sealed space's air pool drained per breather by effort and per fire, four vent bands, saves that wear HP once it runs out, and the smoke layer's turns to head height. Idea inspired by the Dungeoneer's Survival Guide.
+- `collapse`: a new command; a cave-in cascade over an adjacency JSON with a falling chance per step (flat with `--rotten`), and `--daily` placing a rare collapse by direction so it reroutes rather than kills. Idea inspired by the Dungeoneer's Survival Guide.
+- `site --lint`, `--upkeep`, `--threats`: stronghold defence-as-design hooks (water, food, fire load, army-only defences, known secret exits, outposts, lone watchers, untended traps); a staff roster led by the steward with special-room staff and upkeep and income bands from build value; neighbour reactions and why nobody built here before. Idea inspired by the Stronghold Builder's Guidebook.
+- `wander --risk low|medium|high|extreme`: distance from authority adds to each group's count. Idea inspired by Borderland Provinces.
+- `travel --road-segment [FILE]`: per watch none, mundane or dangerous, then that band's table for each road segment. Idea inspired by Borderland Provinces.
+- `settlement --purchase-limit [--purchase-base 50]`: the monthly cap on what the place buys from the party, doubling per size class of the existing size bands. Idea inspired by Borderland Provinces.
+- `realm --changing-times`: realm template completeness, a tension clock with a sign to watch, and jurisdiction for roads, courts, cities and villages. Idea inspired by Borderland Provinces.
+- `encounter --cascade FILE --context wilds|road|city|dungeon --terrain T`: master table by context to a category, a dash in a terrain column means never, "twice" rolls twice more on the smaller die, check interval by context. Idea inspired by the Mother of All Encounter Tables.
+- `adventure --twists N`, `--epilogue`, `--hook`: typed rival twists (lint, or roll the types to write), an epilogue that follows from the win, and a hook lint (patron's selfish motive, a non-combat route, a PC backstory slot). Idea inspired by 100 Fantasy Adventure Seeds.
+- All numbers are ours and settable; no book text or tables copied. 15 new tests.
+
 ## 0.35.0 (2026-11-26)
 - `encounter --card`: each encounter has a `type` (combat, roleplay, puzzle), one or more `function` tags (hook, obstacle, prospect) and a `point` (endpoint, turning, intermediate); no function warns, an arc with no endpoint warns, a random fight tagged hook with nothing that `outlives` it warns. Idea inspired by Gygax's Insidiae.
 - `npcs --roles`: `role:` patron, ally, neutral, hinderer, competitor, enemy or wild card with an `activates:` condition; no role warns, a hinderer with no `tell:` warns, `central: yes` (more central than the PCs) warns. A new `role:` field; the older free-form `roles:` job list is unchanged. Idea inspired by Gygax's Insidiae.
