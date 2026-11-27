@@ -1288,7 +1288,7 @@ def cmd_sessionlog(a):
 
 NPC_DEPTH = ("ideal", "bond", "flaw")
 NPC_EXTRA = ("major", "secret", "joins_party", "exit", "tactics", "but", "roles", "tell", "revealed",
-             "notice", "open", "goals")
+             "notice", "open", "goals", "recurring", "reacts", "danger", "questions", "survival")
 
 
 def cmd_npcs(a):
@@ -1297,13 +1297,14 @@ def cmd_npcs(a):
     npcs = [l[2:].strip() for l in sec.get("npcs", []) if l[:2] in ("- ", "* ")]
     if not npcs:
         die("no ## NPCs bullets")
-    errs = []
+    errs, rows = [], []
     for n in npcs:
         name, _, rest = n.partition(":")
         parts = [x.strip() for x in rest.split(";")]
         extra = {p.split(":", 1)[0].strip().lower(): p.split(":", 1)[1].strip()
                  for p in parts if ":" in p and p.split(":", 1)[0].strip().lower() in NPC_DEPTH + NPC_EXTRA}
         parts = [p for p in parts if not (":" in p and p.split(":", 1)[0].strip().lower() in extra)]
+        rows.append((name.strip(), extra))
         if extra.get("major", "").lower() in ("true", "yes"):
             for k in NPC_DEPTH:
                 if not extra.get(k) and not (k == "flaw" and extra.get("secret")):
@@ -1339,6 +1340,10 @@ def cmd_npcs(a):
             errs.append(f"{name.strip()}: want three parts 'look; doing now; hook because why'")
         elif "because" not in parts[2].lower():
             errs.append(f"{name.strip()}: hook has no why (add 'because ...')")
+    if getattr(a, "recurring", False):
+        pcs = [x.strip() for x in (a.pcs or "").split(",") if x.strip()]
+        for w in npcs_recurring(rows, pcs):
+            print("warn: " + w)
     for e in errs:
         print("error: " + e)
     if errs:
@@ -2450,6 +2455,8 @@ RESULT = {"won": 1, "drawn": 0, "lost": -1}
 
 def cmd_battle(a):
     """Mass battle JSON: exactly three fights the PCs play, each with a shape and what a win carries forward."""
+    if a.caster:
+        return battle_caster(a)
     if a.resolve:
         return battle_resolve(a)
     if a.strength:
@@ -3590,6 +3597,12 @@ def cmd_settlement(a):
             if b not in biz:
                 errs.append(f"function {fn}: no {b} among businesses")
     warns += settlement_extras(c, i)
+    if a.farmland is not None and isinstance(pop, int):
+        fed = a.farmland * a.per_acre + c.get("food_imports", 0)
+        print(f"farmland {a.farmland:g} acres x {a.per_acre:g} + imports {c.get('food_imports', 0)} feeds {fed:g}")
+        if pop > fed:
+            warns.append(f"population {pop} is more than farmland and imports feed ({fed:g}); "
+                         "more acres, food_imports, or famine as a hook")
     report(errs, warns, f"{c.get('name', 'settlement')}: {size}, {pop}")
 
 
@@ -5504,6 +5517,10 @@ def cmd_realm(a):
             warns.append(f"place {p.get('name', '?')}: no hook")
     if not (d.get("culture") or {}).get("custom"):
         warns.append("no culture.custom (one local custom the party will notice)")
+    if a.government:
+        realm_government(d, errs, warns)
+    if a.grant:
+        realm_grants(d, errs, warns)
     if a.strict:
         errs, warns = errs + warns, []
     report(errs, warns, f"realm with {len(places)} places")
@@ -5953,6 +5970,12 @@ def cmd_site(a):
         site_snitch(d, warns)
     prior_party_check(d.get("prior_party"), "site", warns)
     site_factions(d, warns)
+    if a.food:
+        site_food(d, a, warns)
+    if a.purpose:
+        site_purpose(d, a.purpose, warns)
+    if a.water:
+        site_water(d, warns)
     report(errs, warns, f"site {d.get('location', '?')}, {len(entries)} entries")
 
 
@@ -6720,10 +6743,13 @@ def cmd_market(a):
     print(f"{b['name']} ({b['lo']} to {b['hi'] if b['hi'] < 10 ** 9 else 'more'}): {b['wealth']} market, "
           f"shelf goods up to {b['ceiling']} gp, rare goods {b['rare']} (tablewright's own numbers)")
     errs, warns = [], []
+    mult = 1 + AVAILABILITY[a.availability] * a.step if a.availability else 1
+    if a.availability:
+        print(f"availability {a.availability}: prices x{mult:g}")
     for it in a.price or []:
         name, _, cost = it.rpartition("=")
         try:
-            cost = float(cost)
+            cost = round(float(cost) * mult, 2)
         except ValueError:
             die(f"--price wants item=gp, got {it!r}")
         name = name or "item"
@@ -7473,6 +7499,170 @@ def staff_check(t, warns):
             warns.append(f"staff {n}: tie {tie!r} is not another NPC on this card")
 
 
+# ---- 0.34.0: caster-proof armies, site food, water and purpose, market availability, recurring NPCs,
+# farmland, government ladders, land grants. All numbers ours and settable. ----
+CASTER_ABSORB = 3      # an army should outlast the caster's whole area output this many times over
+CASTER_PER_SPELL = 6   # foes one area spell takes out, when the plan does not say
+
+
+def battle_caster(a):
+    """caster {area_spells, per_spell}; enemy size from enemy_size or the count of sides[1] units."""
+    d = load_json(a.plan)
+    c = d.get("caster") or {}
+    spells = c.get("area_spells")
+    if not isinstance(spells, int) or spells < 0:
+        die("--caster wants caster: {area_spells: N, per_spell: K} in the plan")
+    per = c.get("per_spell", CASTER_PER_SPELL)
+    size = d.get("enemy_size")
+    if size is None:
+        sides = d.get("sides") or []
+        if len(sides) < 2:
+            die("--caster wants enemy_size or two sides")
+        size = sum(u.get("count", 1) for u in sides[1].get("units") or [])
+    out = spells * per
+    want = out * a.absorb
+    print(f"caster removes about {out} foes a battle ({spells} area spells x {per}); enemy has {size}")
+    warns = []
+    if size < want:
+        warns.append(f"enemy of {size} cannot absorb the caster; suggest {want}+ ({a.absorb}x the area output), "
+                     "or spread it into groups the caster cannot catch together")
+    report([], warns, f"enemy {size} absorbs {out} ({size / max(1, out):.1f}x)")
+
+
+PREY_PER_PREDATOR = 4  # prey a predator needs to live on; ours
+
+
+def site_food(d, a, warns):
+    """creatures [{name, diet: predator|prey|guardian, count, food, hoard_origin}]."""
+    cr = d.get("creatures") or []
+    if not cr:
+        warns.append("--food: no creatures list")
+        return
+
+    def n(kind):
+        return sum(x.get("count", 1) for x in cr if x.get("diet") == kind)
+    pred, prey = n("predator"), n("prey")
+    if pred and pred * a.prey_per > prey:
+        warns.append(f"{pred} predators need {pred * a.prey_per} prey ({a.prey_per} each), the site has {prey}; "
+                     "add prey, a hunting ground outside, or fewer predators")
+    for x in cr:
+        if x.get("diet") == "guardian" and not x.get("food") and not x.get("hoard_origin"):
+            warns.append(f"guardian {x.get('name', '?')}: no food source and no hoard_origin")
+
+
+SITE_PURPOSE = {"defensive": ("guard", "barracks", "armory"), "residential": ("sleeping", "kitchen", "privy"),
+                "storage": ("storeroom", "loading"), "temple": ("shrine", "priest", "vestry")}
+
+
+def site_purpose(d, purpose, warns):
+    """areas [{name, kind}]: the keyed areas should carry the kit the site's purpose needs."""
+    areas = d.get("areas") or []
+    if not areas:
+        warns.append(f"--purpose {purpose}: no keyed areas")
+        return
+    kinds = " ".join(str(x.get("kind", "")).lower() for x in areas)
+    for k in SITE_PURPOSE[purpose]:
+        if k not in kinds:
+            warns.append(f"{purpose} site with no {k} area")
+    print(f"{purpose} site: " + ", ".join(f"{x.get('name', '?')} ({x.get('kind', '?')})" for x in areas))
+
+
+WATER_FLOW = {"trickle": 20, "well": 150, "spring": 300, "stream": 2000, "river": 10 ** 6, "lake": 10 ** 6}
+
+
+def site_water(d, warns):
+    """settlements and camps [{name, heads, water: {source, flow}}]; flow grade must cover the head count."""
+    places = (d.get("settlements") or []) + (d.get("camps") or [])
+    if not places:
+        warns.append("--water: no settlements or camps")
+    for x in places:
+        nm, w = x.get("name", "?"), x.get("water") or {}
+        if not w.get("source"):
+            warns.append(f"{nm}: no water source")
+            continue
+        flow = w.get("flow")
+        if flow not in WATER_FLOW:
+            warns.append(f"{nm}: flow {flow!r}, use " + ", ".join(WATER_FLOW))
+        elif x.get("heads", 0) > WATER_FLOW[flow]:
+            warns.append(f"{nm}: {x.get('heads')} heads on a {flow} (ours: up to {WATER_FLOW[flow]}); "
+                         "a bigger source or fewer people")
+
+
+AVAILABILITY = {"abundant": -1, "common": 0, "rare": 1}
+
+RECURRING_KEYS = ("reacts", "danger", "questions", "survival")
+
+
+def npcs_recurring(rows, pcs):
+    """rows: (name, extra). Recurring NPCs want reacts (PC=..|..), danger, questions, survival; names not reused."""
+    w = []
+    rec = [(n, e) for n, e in rows if e.get("recurring", "").lower() in ("true", "yes")]
+    if not rec:
+        w.append("--recurring: no NPC marked recurring: yes")
+    for n, e in rec:
+        for k in RECURRING_KEYS:
+            if not e.get(k):
+                w.append(f"{n}: recurring NPC with no {k}:")
+        got = {x.split("=", 1)[0].strip().lower() for x in e.get("reacts", "").split("|") if "=" in x}
+        for pc in pcs:
+            if pc.lower() not in got:
+                w.append(f"{n}: no reaction to {pc}")
+    first = {}
+    for n, _ in rows:
+        f = n.split()[0].lower() if n.split() else ""
+        first.setdefault(f, []).append(n)
+    for f, ns in first.items():
+        if f and len(ns) > 1:
+            w.append(f"name {f!r} reused: " + ", ".join(ns))
+    return w
+
+
+FED_PER_ACRE = 0.5  # people one acre of farmland feeds a year; ours, set with --per-acre
+
+
+def realm_government(d, errs, warns):
+    """government {type, gained, titles [{title, rank}] ruler first, local lord last}."""
+    g = d.get("government") or {}
+    if not g.get("type"):
+        errs.append("no government.type (monarchy, theocracy, council, ...)")
+    if not g.get("gained"):
+        warns.append("no government.gained (how power was won: inheritance, election, conquest, ...)")
+    t = g.get("titles") or []
+    if len(t) < 2:
+        errs.append("government.titles wants 2+ ranks, ruler to local lord")
+        return
+    ranks = [x.get("rank") for x in t]
+    if all(isinstance(r, int) for r in ranks):
+        rs = sorted(ranks)
+        for lo, hi in zip(rs, rs[1:]):
+            if hi - lo > 1:
+                errs.append(f"title ladder gap between rank {lo} and {hi}")
+            if hi == lo:
+                warns.append(f"two titles at rank {lo}")
+    else:
+        warns.append("titles without a whole-number rank; the ladder order is taken as written")
+    rt = (d.get("ruler") or {}).get("title")
+    if rt and rt != t[0].get("title"):
+        warns.append(f"ruler.title {rt!r} is not the top of the ladder ({t[0].get('title')!r})")
+    print("titles: " + " > ".join(str(x.get("title", "?")) for x in t))
+
+
+def realm_grants(d, errs, warns):
+    """grants [{owner, yield, service, opt_out}]: a land reward card per grant."""
+    gs = d.get("grants") or []
+    if not gs:
+        warns.append("--grant: no grants")
+    for x in gs:
+        nm = x.get("land") or x.get("name") or "?"
+        for k in ("owner", "yield", "service"):
+            if not x.get(k):
+                errs.append(f"grant {nm}: no {k}")
+        if not x.get("opt_out"):
+            warns.append(f"grant {nm}: no opt_out (what a player who skips domain play takes instead)")
+        print(f"grant {nm}: owner {x.get('owner', '?')}; yields {x.get('yield', '?')}; owes {x.get('service', '?')}"
+              + (f"; or {x['opt_out']}" if x.get("opt_out") else ""))
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -7568,6 +7758,8 @@ def main(argv=None):
     s = sub.add_parser("npcs", help="check three-line NPC cards")
     s.add_argument("card"); s.add_argument("--but", action="store_true", help="warn on NPCs with no contradiction")
     s.add_argument("--agenda", action="store_true", help="warn on NPCs without 2+ goals: and a tell:")
+    s.add_argument("--recurring", action="store_true", help="recurring NPCs: reacts, danger, questions, survival, unique names")
+    s.add_argument("--pcs", help="--recurring: a,b PC names each recurring NPC reacts: to")
     s.set_defaults(fn=cmd_npcs)
     s = sub.add_parser("world", help="check a setting card's traits")
     s.add_argument("card"); s.set_defaults(fn=cmd_world)
@@ -7652,6 +7844,8 @@ def main(argv=None):
     s.add_argument("--resolve", action="store_true", help="plan is two sides of units: resolve without a map")
     s.add_argument("--strength", action="store_true", help="plan is two sides of units: compare army strength")
     s.add_argument("--rounds", type=int, default=20); s.add_argument("--seed", type=int)
+    s.add_argument("--caster", action="store_true", help="plan has caster {area_spells, per_spell}: is the enemy big enough")
+    s.add_argument("--absorb", type=int, default=CASTER_ABSORB, help="--caster: times the area output the enemy should hold")
     s.set_defaults(fn=cmd_battle)
     s = sub.add_parser("review", help="merge highlights and weak points from session logs per player")
     s.add_argument("logs", nargs="+"); s.set_defaults(fn=cmd_review)
@@ -7804,6 +7998,8 @@ def main(argv=None):
     s.add_argument("--mods", nargs="*"); s.set_defaults(fn=cmd_hack)
     s = sub.add_parser("settlement", help="check a settlement card: band, civic kit, function")
     s.add_argument("card"); s.set_defaults(fn=cmd_settlement)
+    s.add_argument("--farmland", type=float, metavar="ACRES", help="can farmland plus food_imports feed the population")
+    s.add_argument("--per-acre", type=float, default=FED_PER_ACRE, help="--farmland: people fed per acre (ours)")
     s = sub.add_parser("favor", help="ask an NPC a favor, seeded")
     s.add_argument("--relation", choices=list(FAVOR_BASE), required=True)
     s.add_argument("--risk", choices=list(FAVOR_RISK), required=True); s.add_argument("--seed", type=int)
@@ -7928,6 +8124,8 @@ def main(argv=None):
     s.add_argument("file"); s.set_defaults(fn=cmd_develop)
     s = sub.add_parser("realm", help="check a kingdom or region card")
     s.add_argument("file"); s.add_argument("--strict", action="store_true", help="warnings fail too")
+    s.add_argument("--government", action="store_true", help="government type, how power was gained, title ladder")
+    s.add_argument("--grant", action="store_true", help="land reward cards: owner, yield, service, opt_out")
     s.set_defaults(fn=cmd_realm)
     s = sub.add_parser("doomtrack", help="check a doom track: spaces with events, scene costs, outcomes per solved paths")
     s.add_argument("file", nargs="?")
@@ -7949,6 +8147,10 @@ def main(argv=None):
     s.add_argument("--minus-per-live", type=int, default=1, help="--recorrupt: days sooner per living villain")
     s.add_argument("--live", type=int, default=3, help="--recorrupt: villains alive at the start")
     s.add_argument("--snitch", action="store_true", help="non-hostile residents need if_left")
+    s.add_argument("--food", action="store_true", help="creatures: predators the prey can feed, guardians' food")
+    s.add_argument("--prey-per", type=int, default=PREY_PER_PREDATOR, help="--food: prey each predator needs")
+    s.add_argument("--purpose", choices=list(SITE_PURPOSE), help="check keyed areas against the site's purpose")
+    s.add_argument("--water", action="store_true", help="settlements and camps name a water source big enough")
     s.set_defaults(fn=cmd_site)
     s = sub.add_parser("interrogate", help="check an interrogation ladder: ascending DCs, truth tags, the real story")
     s.add_argument("file"); s.set_defaults(fn=cmd_interrogate)
@@ -8025,6 +8227,8 @@ def main(argv=None):
     s = sub.add_parser("market", help="market stock and price ceiling by settlement size band (our numbers)")
     s.add_argument("--band", choices=[b["name"] for b in SIZE_BANDS]); s.add_argument("--population", type=int)
     s.add_argument("--price", action="append", help="item=gp to check against the ceiling")
+    s.add_argument("--availability", choices=list(AVAILABILITY), help="abundant and rare move prices by --step")
+    s.add_argument("--step", type=float, default=0.1, help="--availability: price change (0.1 = 10%%)")
     s.set_defaults(fn=cmd_market)
     s = sub.add_parser("tax", help="upkeep and tax per lifestyle tier per period (our numbers)")
     s.add_argument("--lifestyle", choices=list(LIFESTYLE_UPKEEP))
