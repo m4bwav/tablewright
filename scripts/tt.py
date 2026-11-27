@@ -202,6 +202,7 @@ def cmd_encounter(a):
         res["buffed_xp"], res["buffed_threat"] = buffed, band_for(buffed, budgets)
         notes.append(f"while the {a.buff_source} stands (foes have advantage): {buffed} XP, threat {res['buffed_threat']};"
                      f" once destroyed: {total} XP, threat {band}")
+    res["warnings"] += retreat_ally(a, res, notes)
     if a.trigger:
         if not a.wave:
             res["warnings"].append("--trigger with no --wave")
@@ -1797,6 +1798,8 @@ def cmd_party(a):
         for r in roles:
             if not any(r in p.get("roles", []) for p in pcs):
                 warns.append(f"role {r} has no owner")
+    if "healer" in roles and not any("healer" in p.get("roles", []) for p in pcs) and not d.get("healer_fallback"):
+        warns.append("no healer and no healer_fallback: name the plan B (potions, a hireling, a rest spot)")
     for r in d.get("reveals", []):
         if not r.get("fallback"):
             errs.append(f"reveal with no fallback if the players guess or skip it: {r.get('text', '?')[:40]}")
@@ -2406,6 +2409,8 @@ def cmd_wander(a):
         warns.append(f"about {expected:.1f} encounters, over the budget of {a.budget:g}; check less often or lower the chance")
     if a.placed:
         warns.append(f"placed population in {', '.join(a.placed)}: use it there instead of rolling")
+    if a.table:
+        warns += wander_table(a.table)
     if a.run:
         rng = random.Random(a.seed)
         loud = False
@@ -3194,6 +3199,10 @@ def cmd_tpk(a):
             print("warn: an unearned death costs trust; talk to the player before the next session")
         if not a.cause:
             return
+    if a.capture:
+        capture_outcome(a)
+        if not a.cause:
+            return
     if not a.cause:
         die("--cause (gm-error, bad-luck, player-error) for a wipe, or --reason for one PC's death")
     cause = a.cause.lower()
@@ -3694,6 +3703,8 @@ def cmd_morale(a):
         print(f"{k}: {int(v):+d}")
     if a.leader_cumulative is not None:
         return morale_leader(a)
+    if a.outnumbered is not None:
+        return morale_outnumbered(a)
     if a.break_units is not None or a.dice == "2d6":
         if a.dice == "2d6" and a.rating is None:
             die("--dice 2d6 needs --rating (the morale score)")
@@ -5487,6 +5498,8 @@ DOOM_MAX = 7  # more spaces than this and the track stops feeling close; our num
 def cmd_doomtrack(a):
     """Doom track JSON: spaces with an event and a shown_by, scenes with fail_cost and cap, outcomes per solved paths."""
     import itertools
+    if a.hours is not None:
+        return doom_rests(a)
     if a.stages or a.renewal:
         if a.stages:
             doom_stages(a)
@@ -6755,6 +6768,180 @@ def cmd_citychange(a):
     report(errs, warns, f"{len(cards)} city change clock(s), {sum(bool(c.get('active')) for c in cards)} active")
 
 
+# 0.31.0: retreats, allies, captures, outnumbered morale, exposure, endings, legacy items. Numbers are ours.
+def retreat_ally(a, res, notes):
+    """--retreat FOE:SHARE awards a share of a foe's XP when it leaves; --ally-at R:NAME joins at round R."""
+    warns = []
+    for spec in a.retreat or []:
+        foe, _, share = spec.partition(":")
+        try:
+            share = float(share)
+        except ValueError:
+            die(f"bad --retreat {spec!r} (use FOE:SHARE, e.g. 5:0.5 leaves at half HP)")
+        if not 0 < share < 1:
+            die("--retreat SHARE is between 0 and 1 (HP share left when the foe leaves)")
+        if foe not in a.foe:
+            warns.append(f"--retreat {foe}: no --foe {foe} in this fight")
+            continue
+        xp, _ = foe_xp(a.system, foe, a.level)
+        got = round((xp or 0) * (1 - share))
+        res.setdefault("retreat", []).append({"foe": foe, "share": share, "xp_now": got, "xp_later": (xp or 0) - got})
+        notes.append(f"retreat {foe} at {share:.0%} HP: award {got} XP now, {(xp or 0) - got} when it returns"
+                     f" (log it with carry as a returner)")
+    for spec in a.ally_at or []:
+        rnd, _, name = spec.partition(":")
+        if not rnd.isdigit() or not name:
+            die(f"bad --ally-at {spec!r} (use ROUND:NAME)")
+        cond = f" if {a.ally_if}" if a.ally_if else ""
+        notes.append(f"ally {name} joins at round {rnd}{cond}")
+        if int(rnd) > a.rounds:
+            warns.append(f"ally {name} joins at round {rnd}, after the {a.rounds} rounds the fight should last;"
+                         " bring them in sooner or they never matter")
+        if not a.ally_if:
+            warns.append(f"ally {name} with no --ally-if: name the flag (a rescue, a deal) that earns the help")
+    return warns
+
+
+def capture_outcome(a):
+    """tpk --capture ROOM: the party wakes as prisoners instead of dying."""
+    print(f"capture: the party wakes in {a.capture}, alive, at 1 HP, bound or locked in")
+    if a.taken:
+        print("taken: " + ", ".join(a.taken) + "; say where each item is kept")
+    else:
+        print("warn: no --taken: say what the captors took (weapons, spell focus, coin) and where it is kept")
+    print("hook: leave one way out (a guard to bribe, a loose bar, a rival who wants them free)")
+    print("why: a capture keeps the characters and turns the loss into the next scene")
+
+
+def morale_outnumbered(a):
+    """Break on a condition, no roll: foes at RATIO times their own number or more."""
+    if a.allies is None or a.foes is None or a.allies < 1 or a.foes < 0:
+        die("--outnumbered RATIO needs --allies N (still standing) and --foes N (their enemies)")
+    if a.outnumbered <= 0:
+        die("--outnumbered RATIO must be positive")
+    need = a.outnumbered * a.allies
+    breaks = a.foes >= need
+    print(f"{a.allies} standing against {a.foes}: breaks at {need:g} enemies; "
+          + ("breaks (flee or surrender), no roll" if breaks else "holds"))
+
+
+def cmd_exposure(a):
+    """Failed saves against an exposure per PC; each threshold reached adds a stage, a cure resets the count."""
+    try:
+        stages = [int(x) for x in a.stages.split(",")]
+    except ValueError:
+        die("--stages wants increasing numbers, e.g. 1,3,7,11,15")
+    if not stages or any(b <= c for c, b in zip(stages, stages[1:])) or stages[0] < 1:
+        die("--stages wants increasing numbers from 1, e.g. 1,3,7,11,15")
+    cured = set(a.cured or [])
+    warns = []
+    for spec in a.fails or []:
+        pc, _, n = spec.partition("=")
+        if not n.isdigit():
+            die(f"bad --fails {spec!r} (use PC=N)")
+        n = 0 if pc in cured else int(n)
+        stage = sum(n >= t for t in stages)
+        nxt = next((t for t in stages if t > n), None)
+        line = f"{pc}: {n} failed save(s), stage {stage} of {len(stages)}"
+        line += f", next stage at {nxt}" if nxt else ", final stage"
+        print(line + (" (cured, reset)" if pc in cured else ""))
+        if stage == len(stages):
+            warns.append(f"{pc} is at the final stage; make sure a cure was reachable")
+    report([], warns, f"exposure with {len(stages)} stages")
+
+
+def cmd_endings(a):
+    """Endings JSON {flags, removes: {flag: [foes]}, endings: [{when: {flag: bool}, uses: [foes]}]}: every combination covered."""
+    import itertools
+    d = load_json(a.file)
+    flags = d.get("flags") or []
+    if not flags:
+        die("no flags")
+    errs, warns = [], []
+    rows = d.get("endings") or []
+    seen = {}
+    for i, e in enumerate(rows, 1):
+        w = e.get("when") or {}
+        bad = set(w) - set(flags)
+        if bad:
+            errs.append(f"ending {i}: unknown flag(s) {', '.join(sorted(bad))}")
+        for f, gone in (d.get("removes") or {}).items():
+            if w.get(f) is True:
+                for foe in sorted(set(e.get("uses") or []) & set(gone)):
+                    warns.append(f"ending {i}: uses {foe}, but {f} removes them")
+        for combo in itertools.product((True, False), repeat=len(flags)):
+            if all(w.get(f, v) == v for f, v in zip(flags, combo)):
+                seen.setdefault(combo, []).append(i)
+    for combo in itertools.product((True, False), repeat=len(flags)):
+        tag = ", ".join(f"{f}={'yes' if v else 'no'}" for f, v in zip(flags, combo))
+        if combo not in seen:
+            errs.append(f"no ending for {tag}")
+        elif len(seen[combo]) > 1:
+            warns.append(f"{tag} matches endings {', '.join(map(str, seen[combo]))}; the first wins")
+    report(errs, warns, f"{len(rows)} ending(s) cover {len(seen)} of {2 ** len(flags)} flag combinations")
+
+
+LEGACY_CAP = (1, 6, 3)  # item bonus cap: 1 + level // 6, at most 3; our rule of thumb
+
+
+def cmd_legacy(a):
+    """Legacy item JSON {item, tiers: [{level, bonus, deed, world_event, planned}]}: tiers rise, bonus fits the level."""
+    d = load_json(a.file)
+    tiers = d.get("tiers") or []
+    if not tiers:
+        die("no tiers")
+    errs, warns = [], []
+    last_lvl, last_bonus = 0, None
+    for i, t in enumerate(tiers, 1):
+        lvl, bonus = t.get("level"), t.get("bonus", 0)
+        if not isinstance(lvl, int) or lvl <= last_lvl:
+            errs.append(f"tier {i}: level {lvl} does not rise above {last_lvl}")
+        else:
+            cap = min(LEGACY_CAP[2], LEGACY_CAP[0] + lvl // LEGACY_CAP[1])
+            if bonus > cap:
+                warns.append(f"tier {i}: +{bonus} at level {lvl} is over our cap of +{cap}")
+            last_lvl = lvl
+        if last_bonus is not None and bonus < last_bonus:
+            errs.append(f"tier {i}: bonus +{bonus} drops below the last tier's +{last_bonus}")
+        last_bonus = bonus
+        if not t.get("deed"):
+            warns.append(f"tier {i}: no deed; say what the wielder does to unlock it")
+        elif t.get("world_event") and not t.get("planned"):
+            warns.append(f"tier {i}: deed needs a world event that is not planned; schedule it or the tier never opens")
+    report(errs, warns, f"{d.get('item', 'item')}: {len(tiers)} tier(s)")
+
+
+WANDER_CALM_MIN = 0.3  # non-combat share of a wandering table under this warns; our floor
+
+
+def wander_table(path):
+    """Table JSON [{name, combat, weight}]: warn when non-combat entries are under 30% of the weight."""
+    rows = load_json(path)
+    if not isinstance(rows, list) or not rows:
+        die("--table wants a JSON list of {name, combat, weight}")
+    total = sum(r.get("weight", 1) for r in rows)
+    calm = sum(r.get("weight", 1) for r in rows if not r.get("combat"))
+    share = calm / total if total else 0
+    print(f"table: {len(rows)} entries, non-combat share {share:.0%}")
+    if share < WANDER_CALM_MIN:
+        return [f"non-combat share {share:.0%} under {WANDER_CALM_MIN:.0%}: add signs, travellers or events so not every roll is a fight"]
+    return []
+
+
+def doom_rests(a):
+    """--hours H --rest R: long rests that fit before a hidden deadline."""
+    if a.hours <= 0 or a.rest <= 0:
+        die("--hours and --rest must be positive")
+    n = int(a.hours // a.rest)
+    print(f"{a.hours:g} h to the deadline: {n} long rest(s) of {a.rest:g} h fit")
+    warns = []
+    if n == 0:
+        warns.append("no rest fits: the party must push through; tell them the clock is tight")
+    elif n >= 2 and a.free_rest:
+        warns.append(f"{n} rests fit and resting costs nothing; the deadline has no bite (make rests cost time or noise)")
+    report([], warns, "deadline rests")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -6793,6 +6980,9 @@ def main(argv=None):
             s.add_argument("--trigger", choices=["bloodied"], help="each --wave enters on this, not on its round")
             s.add_argument("--hazard-type", action="append", help="a hazard's damage type, e.g. fire; checked against --immune")
             s.add_argument("--immune", action="append", help="a damage type the boss is immune to; repeat")
+            s.add_argument("--retreat", action="append", help="FOE:SHARE a foe leaves at this HP share; repeat")
+            s.add_argument("--ally-at", action="append", help="ROUND:NAME an ally joins at this round")
+            s.add_argument("--ally-if", help="the flag that earns --ally-at, e.g. rescued-smith")
         else:
             s.add_argument("--threat", default="moderate")
         s.add_argument("--json", action="store_true")
@@ -6922,6 +7112,7 @@ def main(argv=None):
     s.add_argument("--night-chance", type=int, help="1 in N per check during the night hours")
     s.add_argument("--night-hours", type=float, default=8, help="the last H hours of --hours are night")
     s.add_argument("--bump", type=int, default=0, help="after an encounter the next check's N drops by this (noise)")
+    s.add_argument("--table", help="table JSON [{name, combat, weight}]: warn on a non-combat share under 30%%")
     s.add_argument("--run", action="store_true"); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_wander)
     s = sub.add_parser("battle", help="a mass battle as three representative fights")
     s.add_argument("plan"); s.add_argument("--results", help="outcome of each fight in order: won,lost,drawn")
@@ -7023,6 +7214,8 @@ def main(argv=None):
     s.add_argument("--cause", help="gm-error, bad-luck or player-error")
     s.add_argument("--reason", choices=list(DEATH_REASONS), help="one PC died: is the death earned?")
     s.add_argument("--keep-pcs", action="store_true", help="the players want their characters back")
+    s.add_argument("--capture", metavar="ROOM", help="the party is captured, not killed: where they wake")
+    s.add_argument("--taken", action="append", help="with --capture: an item the captors took; repeat")
     s.set_defaults(fn=cmd_tpk)
     s = sub.add_parser("alert", help="dungeon alert track")
     s.add_argument("action", choices=["init", "raise", "lower", "show", "noise", "waves"])
@@ -7086,6 +7279,8 @@ def main(argv=None):
     s.add_argument("--dice", choices=["2d10", "2d6"], default="2d10", help="2d6: odds of each band for 2d6 + rating + mods")
     s.add_argument("--bands", default="rout<=4,fall back<=7,hold", help="2d6 bands, low to high")
     s.add_argument("--leader-cumulative", type=int, metavar="N", help="after the leader falls, flee chance +N%% a round")
+    s.add_argument("--outnumbered", type=float, metavar="RATIO", help="break with no roll when foes reach RATIO x allies")
+    s.add_argument("--allies", type=int); s.add_argument("--foes", type=int)
     s.add_argument("--seed", type=int); s.add_argument("--roll", type=int); s.set_defaults(fn=cmd_morale)
     s = sub.add_parser("awards", help="check per-player awards, milestones and coins in session logs")
     s.add_argument("logs", nargs="+"); s.set_defaults(fn=cmd_awards)
@@ -7195,6 +7390,9 @@ def main(argv=None):
     s.add_argument("--accelerant", type=int, default=7, help="--stages: days each act cuts from each timed stage")
     s.add_argument("--renewal", type=int, metavar="PERIOD", help="renewal preset: days between recasts")
     s.add_argument("--streak", type=int, default=3, help="--renewal: unbroken recasts to make it permanent")
+    s.add_argument("--hours", type=float, help="hours to a hidden deadline: how many long rests fit")
+    s.add_argument("--rest", type=float, default=8, help="--hours: length of a long rest")
+    s.add_argument("--free-rest", action="store_true", help="--hours: resting costs nothing (no noise, no wandering)")
     s.set_defaults(fn=cmd_doomtrack)
     s = sub.add_parser("hazard", help="check a multi-problem hazard round: counters, caps, deadlines, order")
     s.add_argument("file"); s.add_argument("--party", type=int, help="PCs, for start_per_pc and cap_per_pc")
@@ -7304,6 +7502,14 @@ def main(argv=None):
     s.add_argument("--scout-mod", type=int, action="append", help="additive scout modifier, repeat")
     s.add_argument("--hide-mod", type=int, action="append", help="additive hider modifier, repeat")
     s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_scout)
+    s = sub.add_parser("exposure", help="failed saves per PC against staged thresholds")
+    s.add_argument("--stages", required=True, help="failed-save counts that start each stage, e.g. 1,3,7,11,15")
+    s.add_argument("--fails", action="append", help="PC=N failed saves; repeat")
+    s.add_argument("--cured", action="append", help="a cured PC: count resets to 0"); s.set_defaults(fn=cmd_exposure)
+    s = sub.add_parser("endings", help="every combination of world flags has an ending")
+    s.add_argument("file"); s.set_defaults(fn=cmd_endings)
+    s = sub.add_parser("legacy", help="check a legacy item's tiers: rising, bonus fits level, deeds plannable")
+    s.add_argument("file"); s.set_defaults(fn=cmd_legacy)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)

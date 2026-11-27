@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.31.0 (2026-11-26)
+- `encounter --retreat FOE:SHARE`: a foe that leaves at an HP share awards that share of its XP now and the rest when it returns (log it with `carry`); the split is our house choice. Idea inspired by Lord of Gloomthrone, pp. 8, 12.
+- `encounter --ally-at ROUND:NAME [--ally-if FLAG]`: a rescued ally joins the fight at a round; joining after `--rounds` or with no flag warns. Idea inspired by Best Served Cold, p. 27.
+- `tpk --capture ROOM [--taken ITEM]...`: a capture outcome instead of a wipe (where the party wakes, what was taken, one way out); `--cause` is optional with it. Idea inspired by Bandits' Nest, p. 9.
+- `morale --outnumbered RATIO --allies N --foes N`: breaks on a condition, no roll. Idea inspired by Mischief Makers, p. 12.
+- `tt.py exposure --stages 1,3,7,11,15 --fails PC=N... [--cured PC]`: failed saves per PC against staged thresholds; a cure resets the count. Idea inspired by No Laughing Matter, p. 7.
+- `tt.py endings FILE.json`: every yes/no combination of world flags needs an ending row; a row using a foe that one of its flags removes warns; overlapping rows warn. Idea inspired by Lord of Gloomthrone, p. 7.
+- `tt.py legacy FILE.json`: legacy item tiers must rise in level and never lose bonus; a bonus over our cap (1 + level / 6, at most +3) warns; a deed that needs an unplanned world event warns. Idea inspired by Weapons of Legacy, pp. 3, 5, 11.
+- `wander --table FILE`: a wandering table with a non-combat share under 30% (our floor) warns. Idea inspired by WK1 and WK2.
+- `party`: a `healer` role nobody covers with no `healer_fallback` warns. Idea inspired by Trail of Tyranny.
+- `doomtrack --hours H [--rest 8] [--free-rest]`: long rests that fit before a hidden deadline; none warns, 2+ with free rest warns. Idea inspired by For Whom the Bell Tolls, p. 30.
+- Already built before this release: `objective`, `encounter --waves` and `--protect`, `rest --interrupt`.
+- All numbers are ours; no book text or tables copied. 10 new tests (281 total).
+
 ## 0.30.0 (2026-11-26)
 - `fiveroom` `shape: nine`: a nine-node story chart; every node reachable from the first, one end node, dead ends warn, fewer than 3 routes through warn (our floor). Idea inspired by ICRPG 2e Core, p. 82.
 - `encounter --hazard-type T --immune T`: a hazard whose damage type the boss is immune to warns that it only hurts the party. Idea inspired by the Draconomicon, p. 50.
