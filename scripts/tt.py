@@ -26,6 +26,8 @@ Commands:
   downtime    check downtime activities (time, cost or sink, outcome table)
   attendance  players present against the roster; advice for absent PCs
   oneshot     check a one-shot card (bond, plot, finish, pregens with stakes)
+  fightcard   check a fight card (tiers that change tactics, escape hatches)
+  sandbox     check a hex sandbox kit (keys, homes, rumors, clash, factions)
   tpk         remedy after a total party kill, by cause; --reason judges one PC death
   haul        treasure in against a planned rate, removal variety, magic shops
   improvise   a GM gut call (no, maybe, sure) to a DC, our numbers
@@ -2925,6 +2927,8 @@ def cmd_chase(a):
     """City pursuit: each round both sides roll d6, the higher moves the lead one step, then a complication shifts it."""
     import random
     rng = random.Random(a.seed)
+    if a.tally:
+        return chase_tally(a)
     if a.collapse:
         return chase_collapse(a)
     if a.legs:
@@ -3137,6 +3141,7 @@ def cmd_oneshot(a):
             warns.append(f"{n}: no role")
         else:
             roles.setdefault(r, []).append(n)
+    oneshot_party(c, pre, errs, warns)
     for r, ns in roles.items():
         if len(ns) > 1:
             warns.append(f"{' and '.join(ns)} share the role {r}; give each pregen its own job")
@@ -5929,6 +5934,11 @@ def cmd_site(a):
                 at = s.get("turn") if isinstance(s, dict) else None
                 if isinstance(at, int) and at >= turns:
                     warns.append(f"sign at turn {at} is at or past the end ({turns}); a sign must come before it")
+    if d.get("lair") or d.get("owner"):
+        site_lair(d, errs, warns)
+    if a.snitch:
+        site_snitch(d, warns)
+    site_factions(d, warns)
     report(errs, warns, f"site {d.get('location', '?')}, {len(entries)} entries")
 
 
@@ -6048,6 +6058,8 @@ def alert_waves(a):
     """What has arrived by --since-alarm R from a 'ROUND:what' schedule; COUNTxFOE entries get XP via plan_waves."""
     import re
     from types import SimpleNamespace
+    if a.pool is not None:
+        return alert_pool(a)
     if a.since_alarm is None or not a.schedule:
         die("alert waves wants --since-alarm and --schedule 'ROUND:what,...'")
     items = []
@@ -6373,6 +6385,14 @@ ADVENTURE_PILLARS = ("combat", "social", "explore", "either")
 def cmd_adventure(a):
     """Adventure JSON {scenes: [{name, pillar, optional}]}: --pillars counts required and optional scenes per
     pillar; warns when combat or social is missing, one pillar holds over half, or nothing is optional."""
+    if a.elements or a.info:
+        d = load_json(a.file)
+        warns = []
+        if a.elements:
+            adventure_elements(d, warns)
+        if a.info:
+            adventure_info(d, warns)
+        return report([], warns, "adventure" + (" elements" if a.elements else "") + (" info" if a.info else ""))
     scenes = load_list(a.file, "scenes")
     errs, warns, req, opt = [], [], {}, {}
     for s in scenes:
@@ -6472,11 +6492,18 @@ def cmd_puzzle(a):
     """Puzzle rooms JSON {puzzles: [...]}: a deadly puzzle needs a warning; parts and the order clue are placed;
     3+ hints, not all GM-voiced at the start; needed items are in --have; K wrong tries cannot kill a PC of
     --hp; a critical-path puzzle opens a door or has fail_forward."""
+    if a.encode is not None:
+        print(puzzle_encode(a.encode, a.shift))
+        return
+    if not a.file:
+        die("puzzle needs a file, or --encode TEXT")
     pz = load_list(a.file, "puzzles")
+    places = {q.get("at") for q in pz if q.get("at")} | {pt.get("at") for q in pz for pt in q.get("parts") or []}
     have = {x.strip().lower() for x in (a.have or "").split(",") if x.strip()}
     errs, warns = [], []
     for q in pz:
         n = q.get("name", "?")
+        puzzle_kinds(q, places, errs, warns)
         if q.get("deadly") and not q.get("warning"):
             errs.append(f"{n}: deadly with no warning: (a sign or safe test the party can find first)")
         parts = q.get("parts") or []
@@ -6488,7 +6515,7 @@ def cmd_puzzle(a):
         elif q.get("order_clue_at") in {pt.get("at") for pt in parts}:
             warns.append(f"{n}: the order clue sits with a part; place it apart so finding it is its own step")
         hints = q.get("hints") or []
-        if len(hints) < 3:
+        if len(hints) < 3 and q.get("kind") not in ("cipher", "riddle"):
             warns.append(f"{n}: {len(hints)} hint(s); want 3 rising ones (all is here, most things matter, things combine)")
         if len(hints) >= 2 and all(h.get("source", "gm") == "gm" for h in hints[:2]):
             warns.append(f"{n}: first hints are the GM talking; let an NPC or the room give them first")
@@ -6942,6 +6969,268 @@ def doom_rests(a):
     report([], warns, "deadline rests")
 
 
+# ---- 0.32.0: lair cards, reinforcement pools, tally chases, nine elements, ciphers, fight cards, sandboxes ----
+
+SITE_RESOLVE = ("parley", "bribe", "recruit", "capture", "trade", "trick", "sneak")
+
+
+def site_lair(d, errs, warns):
+    """Lair card fields: owner, level, party_size, a non-fight resolution, and who holds the site after."""
+    for k, why in (("owner", "who lives here and runs it"), ("level", "the party level it is built for"),
+                   ("party_size", "how many PCs it is built for"), ("after", "who holds the site once the party is done")):
+        if d.get(k) in (None, ""):
+            warns.append(f"lair: no {k} ({why})")
+    res = [str(x).lower() for x in d.get("resolutions") or []]
+    if not any(x in SITE_RESOLVE for x in res):
+        warns.append("lair: no non-fight resolution; list one of " + ", ".join(SITE_RESOLVE) + " under resolutions")
+
+
+def site_snitch(d, warns):
+    """--snitch: every resident who is not hostile needs if_left: what happens when the party leaves them be."""
+    for r in d.get("residents") or []:
+        if not r.get("hostile") and not r.get("if_left"):
+            warns.append(f"resident {r.get('name', '?')}: not hostile and no if_left: (warns the boss, joins the defence, flees)")
+
+
+def site_factions(d, warns):
+    """Factions in a site: truce_with must name another faction and carry a price; every faction needs after:."""
+    fs = d.get("factions") or []
+    names = {f.get("name") for f in fs}
+    for f in fs:
+        n = f.get("name", "?")
+        for t in f.get("truce_with") or []:
+            if t not in names:
+                warns.append(f"faction {n}: truce_with {t!r} is not a faction here")
+        if f.get("truce_with") and not f.get("price"):
+            warns.append(f"faction {n}: a truce with no price (what keeps it, what breaks it)")
+        if not f.get("after"):
+            warns.append(f"faction {n}: no after: (its move once the party has acted)")
+
+
+def alert_pool(a):
+    """--pool N: reinforcements of --size every --every rounds after the alarm until N are spent."""
+    if a.pool < 1 or a.every < 1 or a.size < 1:
+        die("--pool, --every and --size at least 1")
+    left, rnd, out = a.pool, a.every, []
+    while left > 0:
+        k = min(a.size, left)
+        left -= k
+        out.append((rnd, k, left))
+        rnd += a.every
+    for r, k, l in out:
+        mark = " (arrived)" if a.since_alarm is not None and r <= a.since_alarm else ""
+        print(f"round {r}: {k} arrive, {l} left in the pool{mark}")
+    print(f"pool spent in round {out[-1][0]}; no more reinforcements after it")
+    if a.since_alarm is not None:
+        came = sum(k for r, k, _ in out if r <= a.since_alarm)
+        print(f"by round {a.since_alarm}: {came} arrived, {a.pool - came} defenders still to come")
+
+
+TALLY_AHEAD = 2  # net successes at or above this: ahead; at or below minus this: behind (our band, closed both ends)
+
+
+def chase_tally(a):
+    """--tally PC:sfs,...: fixed rounds of skill checks; net successes per PC against closed bands of +-2."""
+    pcs = []
+    for part in a.tally.split(","):
+        n, _, rolls = part.strip().partition(":")
+        rolls = rolls.strip().lower()
+        if not n or not rolls or set(rolls) - {"s", "f"}:
+            die(f"--tally {part!r}: write PC:sfs (s success, f failure, one letter per round)")
+        pcs.append((n.strip(), rolls))
+    if len({len(r) for _, r in pcs}) > 1:
+        print("warn: PCs rolled a different number of rounds; a tally chase has fixed rounds")
+    lead = next((n for n, r in pcs if r[0] == "s"), None)
+    print(f"leader: {lead or 'nobody (every first roll failed)'}")
+    ahead = behind = 0
+    for n, r in pcs:
+        net = r.count("s") - r.count("f")
+        band = "ahead" if net >= TALLY_AHEAD else "behind" if net <= -TALLY_AHEAD else "even"
+        ahead += band == "ahead"
+        behind += band == "behind"
+        print(f"{n}: {r.count('s')} success, {r.count('f')} failure, net {net:+d}: {band}")
+    print(f"defenders removed before the fight: {ahead}")
+    print("surprise: no, the defenders are alerted" if behind else
+          "surprise: yes" if ahead * 2 > len(pcs) else "surprise: no")
+
+
+ELEMENT_KINDS = ("fight", "talk", "sneak", "skill", "magic", "item")
+
+
+def adventure_elements(d, warns):
+    """--elements: backstory reveal, a unique foe, obstacles with 2+ solution kinds, a clock, milestones that differ
+    from the last adventure, and a lead onward."""
+    bs = d.get("backstory") or {}
+    if not bs.get("reveal_at"):
+        warns.append("no backstory reveal_at: where the party can find out what happened here")
+    if not d.get("unique_foe"):
+        warns.append("no unique_foe: one foe the party meets nowhere else")
+    for o in d.get("obstacles") or []:
+        ks = {str(k).lower() for k in o.get("solutions") or []}
+        if len(ks) < 2:
+            warns.append(f"obstacle {o.get('name', '?')}: {len(ks)} kind(s) of solution; give 2+ ("
+                         + ", ".join(ELEMENT_KINDS) + ")")
+    if not d.get("obstacles"):
+        warns.append("no obstacles listed")
+    if not d.get("clock"):
+        warns.append("no clock: even a small one (a patrol due back, a candle burning down) adds pressure")
+    m, last = d.get("milestones"), d.get("last_milestones")
+    if m and last and list(m) == list(last):
+        warns.append("milestones follow the same pattern as the last adventure; change the order or the kinds")
+    if not d.get("lead_on"):
+        warns.append("no lead_on: a thread that points to the next adventure")
+
+
+def adventure_info(d, warns):
+    """--info: what the party knows at the start, learns during, understands at the end."""
+    info = d.get("info") or {}
+    for k in ("known", "learned", "understood"):
+        print(f"{k}: " + ("; ".join(info.get(k) or []) or "(empty)"))
+    if not info.get("understood"):
+        warns.append("info.understood is empty: the party should end knowing what really went on")
+    if not info.get("learned"):
+        warns.append("info.learned is empty: nothing is found out during play")
+
+
+def puzzle_kinds(q, places, errs, warns):
+    """Cipher and riddle kinds: a cipher needs key_at placed in the adventure; either on the critical path needs bypass."""
+    n, k = q.get("name", "?"), str(q.get("kind") or "").lower()
+    if k == "cipher":
+        if not q.get("key_at"):
+            errs.append(f"{n}: cipher with no key_at: (where the party finds the key)")
+        elif places and q["key_at"] not in places:
+            warns.append(f"{n}: key_at {q['key_at']!r} is not a place in the puzzles' at: list")
+    if k in ("cipher", "riddle") and q.get("critical") and not q.get("bypass"):
+        warns.append(f"{n}: {k} on the critical path with no bypass: (a costly way past for a stuck table)")
+
+
+def puzzle_encode(text, shift):
+    out = []
+    for ch in text:
+        if ch.isascii() and ch.isalpha():
+            base = ord("A") if ch.isupper() else ord("a")
+            out.append(chr((ord(ch) - base + shift) % 26 + base))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def cmd_fightcard(a):
+    """Fight card JSON {name, boss, tiers: [{name, tactics, roster: {foe: count}, hp}], hatches: [{trigger, effect}]}:
+    tiers must differ in tactics or roster kinds, not only HP or counts; a boss fight wants 2+ escape hatches."""
+    d = load_json(a.file)
+    errs, warns = [], []
+    tiers = d.get("tiers") or []
+    for i, t in enumerate(tiers):
+        for u in tiers[i + 1:]:
+            same_tac = str(t.get("tactics") or "").strip().lower() == str(u.get("tactics") or "").strip().lower()
+            if same_tac and set(t.get("roster") or {}) == set(u.get("roster") or {}):
+                warns.append(f"tiers {t.get('name', '?')} and {u.get('name', '?')} differ only in HP or count; "
+                             "change a tactic or who shows up")
+    hatches = d.get("hatches") or []
+    for h in hatches:
+        if not (h.get("trigger") and h.get("effect")):
+            errs.append(f"hatch {h.get('name', '?')}: wants trigger (after N rounds, when X is hit) and effect")
+    if d.get("boss") and len(hatches) < 2:
+        warns.append(f"boss fight with {len(hatches)} hatch(es); hide 2+ ways for it to end early "
+                     "(minions turn, a hold breaks)")
+    report(errs, warns, f"fight {d.get('name', '?')}: {len(tiers)} tier(s), {len(hatches)} hatch(es)")
+
+
+def oneshot_party(c, pre, errs, warns):
+    """party {min, max}, required pregens, roles_min {role: N}, thefts [{item, pc, heads_up}]."""
+    party = c.get("party") or {}
+    lo, hi = party.get("min"), party.get("max")
+    names = {p.get("name") for p in pre}
+    req = c.get("required") or []
+    for r in req:
+        if r not in names:
+            errs.append(f"required pregen {r} is not in pregens")
+    if isinstance(lo, int):
+        if isinstance(hi, int) and hi < lo:
+            errs.append(f"party max {hi} below min {lo}")
+        if len(req) > lo:
+            errs.append(f"{len(req)} required pregens but the party can be {lo}; required must fit the smallest table")
+    if isinstance(hi, int) and len(pre) < hi:
+        warns.append(f"{len(pre)} pregens for up to {hi} players")
+    role_of = {p.get("name"): str(p.get("role") or "").lower() for p in pre}
+    for role, n in (c.get("roles_min") or {}).items():
+        have = sum(1 for r in req if role_of.get(r) == role.lower())
+        if have < n:
+            warns.append(f"role {role}: {have} required pregen(s), want {n}; at the smallest table it may be missing")
+    for t in c.get("thefts") or []:
+        if t.get("pc") and not t.get("heads_up"):
+            warns.append(f"theft of {t.get('item', '?')} from {t['pc']}: tell that player first (heads_up: true)")
+
+
+SANDBOX_HORDE = 5  # fighters per PC beyond which a faction is too big for one fight (our number)
+
+
+def sandbox_hex(h):
+    s = str(h)
+    if len(s) != 4 or not s.isdigit():
+        return None
+    return int(s[:2]) - 1, int(s[2:]) - 1
+
+
+def cmd_sandbox(a):
+    """sandbox.json kit (mapwright gen hexcrawl, or by hand): keys inside the map, encounter homes keyed, rumors
+    true, false and half with true and half on keyed hexes, a clash entry, groups tied to factions, faction sizes."""
+    d = load_json(a.file)
+    errs, warns = [], []
+    g = (d.get("overview") or {}).get("grid") or {}
+    cols, rows = g.get("cols"), g.get("rows")
+    if not cols or not rows:
+        die("overview.grid needs cols and rows")
+
+    def inside(h, what):
+        q = sandbox_hex(h)
+        if q is None:
+            errs.append(f"{what}: hex {h!r}, use four digits, column then row (0307)")
+            return False
+        if not (0 <= q[0] < cols and 0 <= q[1] < rows):
+            errs.append(f"{what}: hex {h} is outside the {cols}x{rows} map")
+            return False
+        return True
+    keys = d.get("keys") or []
+    ids = [k.get("hex") for k in keys]
+    for k in keys:
+        inside(k.get("hex"), f"key {k.get('title', '?')}")
+    for h in sorted({x for x in ids if ids.count(x) > 1}):
+        warns.append(f"hex {h} is keyed more than once")
+    keyed = set(ids)
+    enc = d.get("encounters") or []
+    for e in enc:
+        if e.get("home") is not None and inside(e["home"], f"encounter {e.get('roll')}") and e["home"] not in keyed:
+            warns.append(f"encounter {e.get('roll')}: home hex {e['home']} is not keyed")
+    if enc and not any(e.get("kind") == "clash" for e in enc):
+        warns.append("no clash entry on the encounter chart (two local groups meet)")
+    fac = {f.get("name") for f in d.get("factions") or []}
+    groups = [e for e in enc if e.get("kind", "group") == "group"]
+    if fac and groups:
+        tied = sum(1 for e in groups if e.get("faction") in fac or e.get("group") in fac)
+        if tied * 2 <= len(groups):
+            warns.append(f"{tied} of {len(groups)} encounter groups tied to a local faction; tie most of them")
+    for f in d.get("factions") or []:
+        n = f.get("name", "?")
+        if f.get("noncombatants") is None:
+            warns.append(f"faction {n}: no noncombatants count (the old, the young, the captives)")
+        if isinstance(f.get("fighters"), int) and f["fighters"] > SANDBOX_HORDE * a.party:
+            warns.append(f"faction {n}: {f['fighters']} fighters is too many for one fight with {a.party} PCs; "
+                         "split it into bands or make it a battle")
+    rum = d.get("rumors") or []
+    kinds = {x.get("truth") for x in rum}
+    for x in rum:
+        if x.get("hex") is not None and inside(x["hex"], f"rumor {x.get('roll')}") \
+                and x.get("truth") in ("true", "half") and x["hex"] not in keyed:
+            warns.append(f"rumor {x.get('roll')} ({x['truth']}) points at unkeyed hex {x['hex']}")
+    for want in ("true", "false", "half") if rum else ():
+        if want not in kinds:
+            warns.append(f"rumor chart has no {want} entry")
+    report(errs, warns, f"sandbox {(d.get('overview') or {}).get('name', '?')}: {len(keys)} keyed hexes, "
+                        f"{len(enc)} encounters, {len(rum)} rumors")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -7196,6 +7485,7 @@ def main(argv=None):
     s.add_argument("--edge-speed", type=int, default=20, help="--collapse: edge feet a round")
     s.add_argument("--accel", type=int, default=10, help="--collapse: edge speeds up this much each round")
     s.add_argument("--head-start", type=int, default=30, help="--collapse: feet between party and edge at the start")
+    s.add_argument("--tally", help="tally mode: PC:sfs,... one s or f per fixed round; net +-2 bands")
     s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_chase)
     s = sub.add_parser("attendance", help="who came and what to do with absent PCs")
     s.add_argument("roster"); s.add_argument("--present", type=int, required=True)
@@ -7210,6 +7500,10 @@ def main(argv=None):
     s.set_defaults(fn=cmd_downtime)
     s = sub.add_parser("oneshot", help="check a one-shot card: bond, plot, finish, pregens")
     s.add_argument("card"); s.set_defaults(fn=cmd_oneshot)
+    s = sub.add_parser("fightcard", help="check a fight card: tiers that change tactics, escape hatches")
+    s.add_argument("file"); s.set_defaults(fn=cmd_fightcard)
+    s = sub.add_parser("sandbox", help="check a hex sandbox kit (sandbox.json): keys, homes, rumors, clash, factions")
+    s.add_argument("file"); s.add_argument("--party", type=int, default=4); s.set_defaults(fn=cmd_sandbox)
     s = sub.add_parser("tpk", help="what to do after a total party kill, by cause")
     s.add_argument("--cause", help="gm-error, bad-luck or player-error")
     s.add_argument("--reason", choices=list(DEATH_REASONS), help="one PC died: is the death earned?")
@@ -7225,6 +7519,9 @@ def main(argv=None):
     s.add_argument("--since-alarm", type=int, help="waves: rounds since the alarm")
     s.add_argument("--schedule", help="waves: 'ROUND:what,...'; COUNTxFOE entries count XP with --system and --level")
     s.add_argument("--system", choices=["pf2e", "sf2e", "5e"]); s.add_argument("--level", type=int)
+    s.add_argument("--pool", type=int, help="waves: total reinforcements; stops when spent")
+    s.add_argument("--every", type=int, default=2, help="waves --pool: rounds between arrivals")
+    s.add_argument("--size", type=int, default=2, help="waves --pool: arrivals each time")
     s.add_argument("--tiers", type=int, default=3); s.add_argument("--why"); s.add_argument("--by", type=int, default=1)
     s.add_argument("--merge", action="append", help="init: TIER:group+group that join forces at that tier")
     s.add_argument("--file", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "alert.json"))
@@ -7402,6 +7699,7 @@ def main(argv=None):
     s.add_argument("--recorrupt", type=int, help="days until a cleansed node reverts")
     s.add_argument("--minus-per-live", type=int, default=1, help="--recorrupt: days sooner per living villain")
     s.add_argument("--live", type=int, default=3, help="--recorrupt: villains alive at the start")
+    s.add_argument("--snitch", action="store_true", help="non-hostile residents need if_left")
     s.set_defaults(fn=cmd_site)
     s = sub.add_parser("interrogate", help="check an interrogation ladder: ascending DCs, truth tags, the real story")
     s.add_argument("file"); s.set_defaults(fn=cmd_interrogate)
@@ -7447,13 +7745,17 @@ def main(argv=None):
     s.add_argument("file"); s.add_argument("--once-per-pc", action="store_true", help="treat every boon as once per PC")
     s.set_defaults(fn=cmd_boons)
     s = sub.add_parser("puzzle", help="check puzzle rooms: warnings, hints, needed items, wrong-try cost")
-    s.add_argument("file"); s.add_argument("--have", help="a,b items the party can hold before the puzzles")
+    s.add_argument("file", nargs="?"); s.add_argument("--encode", help="shift-cipher this text for a handout")
+    s.add_argument("--shift", type=int, default=3, help="--encode: letters to shift")
+    s.add_argument("--have", help="a,b items the party can hold before the puzzles")
     s.add_argument("--hp", type=int, help="a PC's max HP for the wrong-try check")
     s.add_argument("--stall-after", type=int, help="wrong tries between hints")
     s.set_defaults(fn=cmd_puzzle)
     s = sub.add_parser("adventure", help="check an adventure's scenes by pillar: combat, social, explore")
     s.add_argument("file"); s.add_argument("--pillars", action="store_true", help="print the count per pillar")
     s.add_argument("--pacing", choices=("pendulum", "pit", "vise"), help="check scene difficulty: against a shape")
+    s.add_argument("--elements", action="store_true", help="nine-element lint: reveal, unique foe, obstacles, clock, lead")
+    s.add_argument("--info", action="store_true", help="what the party knows, learns, understands")
     s.set_defaults(fn=cmd_adventure)
     s = sub.add_parser("mastery", help="mastery marks per school: 4 from one trigger kind, the 4th halves the cost")
     s.add_argument("file"); s.add_argument("--school"); s.add_argument("--trigger", help="kind of deed that earns marks")

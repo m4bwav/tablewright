@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.32.0 (2026-11-26)
+- `site` lair card: with `lair: true` or an `owner`, wants `level`, `party_size`, a non-fight resolution (parley, bribe, recruit, capture...) and `after` (who holds the site next). `site --snitch`: a resident who is not hostile needs `if_left`. Ideas inspired by the Book of Lairs, pp. 4-8.
+- `site` factions: `truce_with` must name a faction here and carry a `price`; a faction with no `after` move warns. Idea inspired by Bandits' Nest, pp. 4, 15.
+- `alert waves --pool N --every R --size K`: reinforcements on a schedule with a hard total; stops when spent and says how many are still to come. Idea inspired by the Book of Lairs, p. 77.
+- `chase --tally PC:sfs,...`: fixed-round skill chase, leader from the first roll, net successes against bands of +2 and -2 that include the boundary (the book leaves exactly 2 open; we close it); prints defenders removed and surprise. Idea inspired by the Book of Lairs, p. 64.
+- `adventure --elements` (backstory reveal, unique foe, obstacles with 2+ kinds of solution, a clock, milestones unlike the last adventure, a lead onward) and `adventure --info` (known, learned, understood; an empty end column warns). Ideas inspired by the Tome of Adventure Design, pp. 6-7, 129, 135.
+- `puzzle` `kind: cipher` needs `key_at` (placed in the puzzles), a cipher or riddle on the critical path needs `bypass`; `puzzle --encode TEXT --shift N` for handouts. Idea inspired by the Tome of Adventure Design, pp. 147-148.
+- `tt.py fightcard FILE.json`: tiers that differ only in HP or count warn; escape `hatches` need trigger and effect; a boss fight with fewer than two warns. Ideas inspired by The Wizard's Amulet, pp. 10, 13.
+- `oneshot` `party` {min, max}, `required` pregens that fit the smallest table, `roles_min` covered by required pregens, `thefts` of a PC's item without `heads_up` warn. Idea inspired by The Wizard's Amulet, pp. 3, 5.
+- `tt.py sandbox sandbox.json`: lints the kit mapwright 0.36.0 `gen hexcrawl` writes (keys inside the map, encounter homes keyed, rumors true, false and half with true and half on keyed hexes, a clash entry) plus optional `factions` (groups tied to factions, noncombatant counts, more than 5 fighters per PC warns). Idea inspired by Points of Light, pp. 2, 5, 8-9, 15-16.
+- All numbers are ours; no book text or tables copied. 12 new tests.
+
 ## 0.31.0 (2026-11-26)
 - `encounter --retreat FOE:SHARE`: a foe that leaves at an HP share awards that share of its XP now and the rest when it returns (log it with `carry`); the split is our house choice. Idea inspired by Lord of Gloomthrone, pp. 8, 12.
 - `encounter --ally-at ROUND:NAME [--ally-if FLAG]`: a rescued ally joins the fight at a round; joining after `--rounds` or with no flag warns. Idea inspired by Best Served Cold, p. 27.
