@@ -141,6 +141,8 @@ def band_for(total, budgets):
 
 
 def cmd_encounter(a):
+    if a.phase:
+        encounter_phase(a)
     if a.card:
         return encounter_card(a.card)
     if a.cascade:
@@ -453,6 +455,7 @@ def show(d, public=False):
         conds = (" [" + ", ".join(c["conditions"]) + "]") if c["conditions"] else ""
         conds += "".join(f" ({e['name']} {e['rounds']}r)" for e in c.get("effects", []))
         conds += "".join(f" ({x['name']} stage {x['stage'] + 1}/{len(x['stages'])})" for x in c.get("poisons", []))
+        conds += "".join(f" ({x['name']} step {x['step'] + 1}/{len(x['steps'])})" for x in c.get("curses", []))
         state = " DOWN" if c["hp"] <= 0 else ""
         hp = f"took {c['max_hp'] - c['hp']}" if public else f"{c['hp']}/{c['max_hp']}"
         print(f"{mark} {c['init']:>3} {c['name']:<16} {hp}{state}{conds}")
@@ -678,6 +681,10 @@ def cmd_tracker(a):
                 print(f"{c['name']}: {a.args[1]} stage 1: {stages[0]}{dc_text(x)}")
             else:
                 die("poison NAME POISON STAGE1,STAGE2,... [INTERVAL_ROUNDS], or poison cure NAME [POISON]")
+        elif a.action == "curse":
+            tracker_curse(a, d)
+        elif a.action == "rest":
+            tracker_rest(a, d)
         elif a.action == "countdown":
             if len(a.args) != 2 or not a.owner:
                 die("countdown NAME dN --owner COMBATANT")
@@ -771,6 +778,12 @@ def load_char(path):
 
 
 def cmd_check(a):
+    if a.lint:
+        return check_lint(a)
+    if a.uncertain:
+        return check_uncertain(a)
+    if not a.character:
+        die("check CHARACTER.json, or --lint FILE, or --uncertain --dc N")
     errs = check_char(load_char(a.character))
     for e in errs:
         print("error: " + e)
@@ -846,6 +859,10 @@ MEMENTOS = ("clue", "loss", "gain", "plea", "curse", "known-foe")
 
 def cmd_prep(a):
     """Check a session card: an opening, N leads, NPCs that each want something, fights with a way out."""
+    if a.players:
+        return prep_players(a)
+    if a.finale:
+        return prep_finale(a)
     sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
     bullets = lambda k: [l[2:].strip() for l in sec.get(k, []) if l[:2] in ("- ", "* ")]
     errs, warns = [], []
@@ -1219,6 +1236,8 @@ def cmd_world(a):
 
 def cmd_threads(a):
     """Promises and planted objects: '- thread: open' or '- thread: paid'. --finale fails on any still open."""
+    if a.spotlight:
+        return threads_spotlight(a)
     sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
     th = [l[2:].strip() for l in sec.get("threads", []) if l[:2] in ("- ", "* ")]
     if not th:
@@ -1555,6 +1574,7 @@ def cmd_villain(a):
             warns.append(f"{name}: met in one place only; give two or more (where: a, b) so a missed scene is not a lost villain")
     if not sec:
         die("no '## Name' villain sections")
+    villain_clues(sec, a.clues, warns, errs)
     if a.escapes:
         seen = {}
         for name, lines in sec.items():
@@ -1572,6 +1592,8 @@ def cmd_villain(a):
 
 def cmd_twist(a):
     """Twists (JSON list of {text, axis, sign, removes, workaround}): axis spread, a positive one, workarounds."""
+    if a.prophecy:
+        return twist_prophecy(a)
     tw = json.loads(Path(a.twists).read_text(encoding="utf-8"))
     errs, warns = [], []
     for t in tw:
@@ -1588,6 +1610,8 @@ def cmd_twist(a):
 def cmd_campaign(a):
     """Campaign plan JSON: every PC has a plotline, adventures have phase and why, NPCs stay out once written out."""
     c = json.loads(Path(a.plan).read_text(encoding="utf-8"))
+    if a.pacing:
+        return campaign_pacing(c)
     adv, errs, warns = c.get("adventures", []), [], []
     for pc in c.get("pcs", []):
         if not any(pc in x.get("plotline", []) for x in adv):
@@ -1789,6 +1813,8 @@ PARTY_ENTRY = ("happenstance", "rescued", "remnant", "errand")
 
 def cmd_party(a):
     """Party JSON {pcs: [{name, ties, plot_tie}], reveals: [{text, fallback}]}: PC ties, plot ties, plan B."""
+    if a.check_stakes:
+        return party_stakes(a)
     d = json.loads(Path(a.file).read_text(encoding="utf-8"))
     pcs = d.get("pcs", [])
     names = {p.get("name") for p in pcs}
@@ -1939,7 +1965,7 @@ def cmd_safety(a):
     report(errs, warns, f"cut call set, {len(conf)} player(s) confirmed")
 
 
-DICE = (2, 3, 4, 6, 8, 10, 12, 20, 100)
+DICE = (2, 3, 4, 6, 8, 10, 12, 20, 100, 1000)
 
 
 def roll_range(r):
@@ -2029,6 +2055,8 @@ def cmd_table(a):
         return table_check(a)
     if a.table == "lint":
         return table_lint(a)
+    if a.table == "roll":
+        return table_roll(a)
     if a.band:
         return table_band(a)
     if a.tables:
@@ -3859,6 +3887,10 @@ ROOM_KEYS = ("timer", "threat", "treat")  # the same tags prep's fight check rea
 def cmd_rooms(a):
     """Rooms JSON {rooms: [{name, timer, threat, treat, stake, wonder, enemies, difficulty, damage, disruption, duration}]}."""
     rooms = load_list(a.file, "rooms")
+    if a.skip:
+        return rooms_skip(a, rooms)
+    if a.rally:
+        return rooms_rally(a, rooms)
     errs, warns = [], []
     if not 2 <= len(rooms) <= 4:
         warns.append(f"{len(rooms)} rooms; 2 to 4 keeps a session moving (our default)")
@@ -8403,6 +8435,416 @@ def adventure_seed(d, a, errs, warns):
             warns.append("hook: no slot tied to a PC's backstory")
 
 
+# 0.37.0: spotlight, pacing, finales, prophecies, escorts, curses. Structure from the books; every number is ours.
+
+SPOTLIGHT_MAX = 0.40  # one PC may own at most this share of threads; our number
+NONPLOT_MAX = 0.50  # non-plot scenes per session; our number
+COMBAT_MAX = 0.70  # combat share of all scenes; our number
+FINALE_STEPS = ("mayhem", "duel", "resolution")
+
+
+def bullets_of(lines):
+    return [l[2:].strip() for l in lines if l[:2] in ("- ", "* ")]
+
+
+def names_list(v):
+    return [x.strip() for x in str(v or "").replace("|", ",").split(",") if x.strip()]
+
+
+def threads_spotlight(a):
+    """## Threads bullets 'name; pc: A; kind: conflict; opposes: X' and ## PCs (or --pcs): spotlight spread."""
+    sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
+    th = bullets_of(sec.get("threads", []))
+    if not th:
+        die("no ## Threads bullets")
+    pcs = names_list(a.pcs) if a.pcs else [b.split(";")[0].strip() for b in bullets_of(sec.get("pcs", []))]
+    if not pcs:
+        die("--spotlight needs ## PCs bullets or --pcs A,B,C")
+    errs, warns, own = [], [], {p.lower(): 0 for p in pcs}
+    for t in th:
+        name = t.split(";")[0].strip()
+        owners = names_list(tag(t, "pc"))
+        if not owners:
+            warns.append(f"{name}: no pc: owner")
+        for o in owners:
+            if o not in own:
+                warns.append(f"{name}: pc {o} is not in the party")
+            else:
+                own[o] += 1
+        if tag(t, "kind") == "conflict" and not tag(t, "opposes"):
+            errs.append(f"{name}: conflict thread with no opposes: (who or what it is against)")
+    for p in pcs:
+        n = own[p.lower()]
+        share = n / len(th)
+        print(f"{p}: {n} thread(s), {share:.0%}")
+        if n == 0:
+            errs.append(f"{p} owns no thread; give them one")
+        elif share > SPOTLIGHT_MAX and len(pcs) > 1:
+            warns.append(f"{p} owns {share:.0%} of threads, over {SPOTLIGHT_MAX:.0%}; share the spotlight")
+    report(errs, warns, f"{len(th)} threads over {len(pcs)} PCs")
+
+
+def party_stakes(a):
+    """Each PC needs goal, stake, blocker (what stops them walking away) and 2+ threads."""
+    pcs = load_list(a.file, "pcs")
+    errs = []
+    for p in pcs:
+        n = p.get("name", "?")
+        miss = [k for k in ("goal", "stake", "blocker") if not p.get(k)]
+        if miss:
+            errs.append(f"{n}: no " + ", ".join(miss))
+        t = p.get("threads") or []
+        if len(t) < 2:
+            errs.append(f"{n}: {len(t)} thread(s), want 2+ so one stalled thread does not bench them")
+    report(errs, [], f"{len(pcs)} PCs have goal, stake, blocker and threads")
+
+
+def campaign_pacing(c):
+    """sessions: [{name, advances, stake_raise, hook, finale, scenes: [{kind plot|side|combat, deadly, warning}]}]."""
+    ss = c.get("sessions") or []
+    if not ss:
+        die("--pacing needs sessions: [...]")
+    errs, warns = [], []
+    fin = next((i for i, s in enumerate(ss) if s.get("finale")), len(ss) - 1)
+    if not any(s.get("stake_raise") for s in ss[:fin]):
+        errs.append("no stake_raise in a session before the finale; raise the stakes first")
+    allsc, warned = [], False
+    for i, s in enumerate(ss):
+        n = s.get("name", f"session {i + 1}")
+        sc = s.get("scenes") or []
+        if not s.get("advances"):
+            errs.append(f"{n}: no advances: (what moves the plot this session)")
+        side = [x for x in sc if x.get("kind") == "side"]
+        if sc and len(side) / len(sc) >= NONPLOT_MAX:
+            warns.append(f"{n}: {len(side)}/{len(sc)} non-plot scenes, at or over {NONPLOT_MAX:.0%}")
+        if i != fin and not s.get("hook"):
+            warns.append(f"{n}: no hook: to end on")
+        for x in sc:
+            if x.get("warning"):
+                warned = True
+            if x.get("deadly") and not warned:
+                errs.append(f"{n}: deadly scene {x.get('name', '?')} with no earlier warning: scene")
+        allsc += sc
+    fights = [x for x in allsc if x.get("kind") == "combat"]
+    if allsc:
+        share = len(fights) / len(allsc)
+        print(f"combat {share:.0%} of {len(allsc)} scenes")
+        if share >= COMBAT_MAX:
+            warns.append(f"combat is {share:.0%} of scenes, at or over {COMBAT_MAX:.0%}")
+    report(errs, warns, f"{len(ss)} sessions paced")
+
+
+def prep_players(a):
+    """--players JSON [{name, wants: [tags], engagement}]; ## Scenes bullets carry serves: and lead:."""
+    sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
+    pl = load_list(a.players, "players")
+    sc = bullets_of(sec.get("scenes", []))
+    if not sc:
+        die("no ## Scenes bullets")
+    warns = []
+    for p in pl:
+        n = p.get("name", "?")
+        keys = {n.lower()} | {w.lower() for w in p.get("wants") or []}
+        hit = [s.split(";")[0] for s in sc if keys & {x.lower() for x in names_list(tag(s, "serves"))}]
+        print(f"{n}: served by {len(hit)} scene(s)")
+        if not hit:
+            warns.append(f"{n}: no scene serves them (wants: {', '.join(p.get('wants') or []) or 'none listed'})")
+        if str(p.get("engagement", "")).lower() == "low":
+            for s in sc:
+                if n.lower() in [x.lower() for x in names_list(tag(s, "lead"))]:
+                    warns.append(f"{n}: low engagement but leads {s.split(';')[0]}; give them a side role first")
+    report([], warns, f"{len(pl)} players over {len(sc)} scenes")
+
+
+def prep_finale(a):
+    """Every conflict: tag in ## Scenes needs a ## Finale beat; beats mayhem, duel, resolution in order; a duel per PC."""
+    sec = prep_sections(Path(a.card).read_text(encoding="utf-8"))
+    fb = bullets_of(sec.get("finale", []))
+    if not fb:
+        die("no ## Finale bullets (beat: mayhem|duel|resolution; conflict: X; pc: A; opponent: Y)")
+    errs, warns = [], []
+    conf = {tag(s, "conflict") for k, v in sec.items() if k != "finale" for s in bullets_of(v)} - {""}
+    done = {tag(b, "conflict") for b in fb}
+    for c in sorted(conf - done):
+        errs.append(f"conflict {c} has no finale beat")
+    beats = [tag(b, "beat") for b in fb]
+    bad = [b for b in beats if b not in FINALE_STEPS]
+    if bad:
+        errs.append(f"beat values {bad}; use {', '.join(FINALE_STEPS)}")
+    order = [FINALE_STEPS.index(b) for b in beats if b in FINALE_STEPS]
+    if order != sorted(order):
+        warns.append("finale beats out of order; run mayhem, then duels, then resolution")
+    for s in FINALE_STEPS:
+        if s not in beats:
+            warns.append(f"no {s} beat")
+    pcs = names_list(a.pcs) if a.pcs else [b.split(";")[0].strip() for b in bullets_of(sec.get("pcs", []))]
+    for p in pcs:
+        if not any(tag(b, "beat") == "duel" and p.lower() in names_list(tag(b, "pc")) and tag(b, "opponent") for b in fb):
+            warns.append(f"{p} has no personal opponent in a duel beat")
+    report(errs, warns, f"{len(fb)} finale beats, {len(conf)} conflicts")
+
+
+def villain_clues(sec, clues_file, warns, errs):
+    """stimuli: and weakness: lines each need a clue: bullet with reveals: that key; --clues counts pointing clues."""
+    ext = load_list(clues_file, "clues") if clues_file else []
+    for name, lines in sec.items():
+        b = bullets_of(lines)
+        planted = {tag(x, "reveals") for x in b if x.lower().startswith("clue:")}
+        planted |= {str(c.get("reveals", "")).lower() for c in ext if str(c.get("points_to", "")).lower() == name}
+        for k in ("stimuli", "weakness"):
+            if any(x.lower().startswith(k + ":") for x in b) and k not in planted:
+                errs.append(f"{name}: {k}: with no planted clue (clue: ...; reveals: {k})")
+        if clues_file:
+            n = sum(1 for c in ext if str(c.get("points_to", "")).lower() == name)
+            print(f"{name}: {n} clue(s) point at them")
+            if n < 3:
+                warns.append(f"{name}: {n} clue(s) point at them; 3+ so one missed clue does not hide them")
+
+
+def twist_prophecy(a):
+    """Prophecies JSON [{text, kind if|when, goal, symbols: [{symbol, referent, hints: [..]}]}]."""
+    ps = load_list(a.twists, "prophecies")
+    errs, warns = [], []
+    for i, p in enumerate(ps, 1):
+        n = p.get("name") or f"prophecy {i}"
+        k = p.get("kind")
+        if k not in ("if", "when"):
+            errs.append(f"{n}: kind {k!r}; tag it if (may happen) or when (will happen)")
+        if k == "when" and not p.get("goal"):
+            errs.append(f"{n}: a when prophecy needs a goal: the PCs can pursue, or they only watch fate")
+        syms = p.get("symbols") or []
+        if not syms:
+            warns.append(f"{n}: no symbols")
+        for s in syms:
+            sn = s.get("symbol", "?")
+            if not s.get("referent"):
+                errs.append(f"{n}: symbol {sn} has no referent (what it really means)")
+            if len(s.get("hints") or []) < 2:
+                warns.append(f"{n}: symbol {sn} has {len(s.get('hints') or [])} hint(s); a ladder of 2+ from vague to plain")
+    report(errs, warns, f"{len(ps)} prophecies")
+
+
+CHECK_FAIL = ("safe", "hazardous", "fateful")
+UNCERTAIN_PARTIAL = 5  # missing by less than this is a partial truth; our number
+
+
+def check_lint(a):
+    """Check cards JSON [{name, mods: [..], fail: safe|hazardous|fateful}]."""
+    cs = load_list(a.character, "checks")
+    errs, warns = [], []
+    for c in cs:
+        n = c.get("name", "?")
+        if len(c.get("mods") or []) >= 2:
+            warns.append(f"{n}: {len(c['mods'])} stacked modifiers; fold them into one")
+        if c.get("fail") not in CHECK_FAIL:
+            errs.append(f"{n}: no fail tag ({', '.join(CHECK_FAIL)}): what failing costs")
+    report(errs, warns, f"{len(cs)} checks")
+
+
+def check_uncertain(a):
+    """Hidden GM d20 + bonus against DC: full truth, partial truth (miss by under 5) or false belief."""
+    import random
+    if a.dc is None:
+        die("--uncertain needs --dc")
+    b = a.bonus or 0
+    full = min(20, max(0, 21 - (a.dc - b))) / 20
+    part = min(20, max(0, 21 - (a.dc - UNCERTAIN_PARTIAL + 1 - b))) / 20 - full
+    print(f"odds: full {full:.0%}, partial {part:.0%}, false {1 - full - part:.0%} (d20{b:+d} vs DC {a.dc})")
+    r = random.Random(a.seed).randint(1, 20)
+    m = r + b - a.dc
+    out = "full" if m >= 0 else ("partial" if m > -UNCERTAIN_PARTIAL else "false")
+    print(f"GM only: rolled {r}{b:+d} = {r + b}, {out}")
+    print({"full": "player hears: you are sure, and you are right",
+           "partial": "player hears: you are sure; tell part of the truth",
+           "false": "player hears: you are sure; tell them something wrong they believe"}[out])
+
+
+def table_roll(a):
+    """Roll a CSV table: d1000 as three d10s; --columns rolls each column on its own."""
+    import random
+    if len(a.tables) != 1:
+        die("table roll FILE.csv [--columns] [--count N] [--seed N]")
+    rows, covered, errs = read_table(a.tables[0])
+    if errs:
+        die("; ".join(errs))
+    top, rnd = max(covered), random.Random(a.seed)
+    cols = [k for k in rows[0] if k != "roll"]
+
+    def one():
+        if top == 1000:
+            h, t, u = rnd.randint(0, 9), rnd.randint(0, 9), rnd.randint(0, 9)
+            v = h * 100 + t * 10 + u or 1000
+            return v, f"d1000 {h}{t}{u}"
+        v = rnd.randint(1, top)
+        return v, f"d{top} {v}"
+
+    def row(v):
+        return next(r for r in rows if roll_range(r)[0] <= v <= roll_range(r)[1])
+
+    for _ in range(a.count or 1):
+        if a.columns:
+            parts = []
+            for k in cols:
+                v, txt = one()
+                parts.append(f"{k}={row(v)[k]} ({txt})")
+            print("; ".join(parts))
+        else:
+            v, txt = one()
+            print(f"{txt}: " + ", ".join(row(v)[k] for k in cols))
+
+
+ESCORT_SURVIVAL = 0.25  # survival XP as a share of the route's room XP; our number
+
+
+def shortest(by, start, goal, extra=()):
+    from collections import deque
+    q, prev = deque([start]), {start: None}
+    while q:
+        n = q.popleft()
+        if n == goal:
+            path = []
+            while n:
+                path.append(n)
+                n = prev[n]
+            return path[::-1]
+        for nx in list(by.get(n, {}).get("exits") or []) + [t for f, t in extra if f == n]:
+            if nx in by and nx not in prev:
+                prev[nx] = n
+                q.append(nx)
+    return None
+
+
+def rooms_skip(a, rooms):
+    """--skip DOOR: rooms with shortcuts: [{door, to}]; rooms and awards on the normal route cut when it opens first."""
+    by = {r.get("name", "?"): r for r in rooms}
+    sc = [(n, s.get("to")) for n, r in by.items() for s in r.get("shortcuts") or [] if s.get("door") == a.skip]
+    if not sc:
+        die(f"no room has a shortcut door {a.skip}")
+    goal = next((n for n, r in by.items() if r.get("goal")), None)
+    if not goal:
+        die("--skip: mark a room goal: true")
+    start = entry_rooms(rooms)[0]
+    base, cut = shortest(by, start, goal), shortest(by, start, goal, sc)
+    if not base or not cut:
+        die("--skip: no path from the entry to the goal")
+    gone = [n for n in base if n not in cut]
+    xp = sum(int(by[n].get("xp", 0)) for n in gone)
+    aw = [x for n in gone for x in by[n].get("awards") or []]
+    print(f"normal route: {' > '.join(base)}")
+    print(f"door {a.skip} first: {' > '.join(cut)}")
+    print(f"cut off: {', '.join(gone) or 'nothing'}; {xp} XP" + (f"; awards {', '.join(aw)}" if aw else ""))
+    if aw:
+        print("warn: awards past the shortcut are lost; move one or give the shortcut its own reward")
+
+
+def rooms_rally(a, rooms):
+    """--rally ALLY: foes with flee_to (or flees: true) join the room holding foe ALLY for the finale."""
+    home = next((r for r in rooms for f in r.get("foes") or [] if f.get("name") == a.rally), None)
+    if not home:
+        die(f"no foe named {a.rally}")
+    base = sum(int(f.get("count", 1)) for f in home.get("foes") or [])
+    join = [(r.get("name", "?"), f) for r in rooms if r is not home for f in r.get("foes") or []
+            if f.get("flee_to") or f.get("flees")]
+    extra = sum(int(f.get("count", 1)) for _, f in join)
+    for rn, f in join:
+        print(f"{rn}: {f.get('name', 'foe')} x{f.get('count', 1)} flees to {a.rally}")
+    print(f"{a.rally}'s finale force: min {base} (every fleer cut down), max {base + extra} (all escape)")
+
+
+def cmd_escort(a):
+    """Escort NAME along --route over a rooms JSON: flee-and-rejoin per foe room, patience for lingering, survival XP."""
+    rooms = load_list(a.file, "rooms")
+    by = {r.get("name", "?"): r for r in rooms}
+    route = names_list(a.route)
+    miss = [x for x in route if x not in by]
+    if miss:
+        die(f"--route rooms not found: {miss}")
+    left, xp = a.patience, 0
+    for i, rn in enumerate(route):
+        r = by[rn]
+        xp += int(r.get("xp", 0))
+        nxt = route[i + 1] if i + 1 < len(route) else "the exit"
+        notes = []
+        if r.get("foes") or r.get("threat"):
+            notes.append(f"{a.name} flees on the first blow and rejoins in {nxt}")
+        lin = int(r.get("linger", 0))
+        if lin:
+            left -= lin
+            notes.append(f"lingering costs {lin} patience, {max(left, 0)} left")
+            if left < 0:
+                notes.append(f"{a.name} runs out of patience and goes on alone")
+        print(f"{rn}: " + ("; ".join(notes) or "quiet"))
+    bonus = round(xp * ESCORT_SURVIVAL)
+    print(f"route XP {xp}; {a.name} alive at the end adds {bonus} XP ({ESCORT_SURVIVAL:.0%}, ours)")
+
+
+def tracker_curse(a, d):
+    """curse NAME CURSE [STEPS] --stack N [--clear-flag F] [--upkeep 24h]; curse clear NAME CURSE FLAG."""
+    if a.args[:1] == ["clear"]:
+        if len(a.args) != 4:
+            die("curse clear NAME CURSE FLAG")
+        c = find(d, a.args[1])
+        x = next((x for x in c.get("curses", []) if x["name"].lower() == a.args[2].lower()), None)
+        if not x:
+            die(f"{c['name']} has no curse {a.args[2]}")
+        if x.get("clear") and x["clear"].lower() != a.args[3].lower():
+            die(f"{x['name']} is cleared by {x['clear']}, not {a.args[3]}")
+        c["curses"].remove(x)
+        d["log"].append(f"r{d['round']} {c['name']}: {x['name']} cleared by {a.args[3]}")
+        print(f"{c['name']}: {x['name']} cleared")
+        return
+    if len(a.args) not in (2, 3):
+        die("curse NAME CURSE [STEP1,STEP2,...] --stack N")
+    c = find(d, a.args[0])
+    labels = names_list(a.args[2]) if len(a.args) == 3 else []
+    n = len(labels) or a.stack or 3
+    x = next((x for x in c.get("curses", []) if x["name"].lower() == a.args[1].lower()), None)
+    if not x:
+        x = {"name": a.args[1], "steps": labels or [f"step {i}" for i in range(1, n + 1)], "step": 0}
+        if a.clear_flag:
+            x["clear"] = a.clear_flag
+        if a.upkeep:
+            x["upkeep"] = a.upkeep
+        c.setdefault("curses", []).append(x)
+        print(f"{c['name']}: first dose of {x['name']}: save now{dc_text({'dc': a.dc})}; a pass leaves no curse. "
+              "Later doses get no save.")
+    elif x["step"] + 1 >= len(x["steps"]):
+        print(f"{c['name']}: {x['name']} is already at its last step")
+    else:
+        x["step"] += 1
+        print(f"{c['name']}: dose {x['step'] + 1}, no save")
+    k = len(x["steps"])
+    print(f"{x['name']} step {x['step'] + 1}/{k}: {x['steps'][x['step']]}"
+          + (f" (permanent until {x.get('clear', 'cleared')})" if x["step"] == k - 1 else ""))
+    d["log"].append(f"r{d['round']} {c['name']}: {x['name']} step {x['step'] + 1}")
+
+
+def tracker_rest(a, d):
+    """rest NAME [--failed]: curses with --upkeep need a save; a failed one voids the rest (no healing)."""
+    if len(a.args) != 1:
+        die("rest NAME [--failed]")
+    c = find(d, a.args[0])
+    up = [x for x in c.get("curses", []) if x.get("upkeep")]
+    for x in up:
+        print(f"{c['name']}: save against {x['name']} (every {x['upkeep']})")
+    if a.failed and up:
+        print(f"{c['name']}: rest voided; no HP or recovery from it")
+        d["log"].append(f"r{d['round']} {c['name']}: rest voided")
+    else:
+        c["hp"] = c["max_hp"]
+        print(f"{c['name']}: rested to {c['hp']}")
+
+
+def encounter_phase(a):
+    """--phase TERRAIN: changes on the boss's first action, ends at her death; --summons are removed then."""
+    print(f"phase: on the boss's first action the field becomes {a.phase}")
+    print("phase ends when the boss dies; the terrain reverts")
+    if a.summons:
+        print(f"stranded summons removed at her death: {', '.join(names_list(a.summons))}")
+    if a.hazard:
+        print("warn: --phase terrain is part of the boss fight, not a hazard; do not also count it as --hazard XP")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -8447,13 +8889,19 @@ def main(argv=None):
             s.add_argument("--ally-if", help="the flag that earns --ally-at, e.g. rescued-smith")
             s.add_argument("--cascade", help="cascade JSON {master: {context: [{roll, to}]}, categories: {name: {terrain: [..]|'-'}}}")
             s.add_argument("--context", choices=list(CASCADE_EVERY), help="--cascade: master table and check interval")
+            s.add_argument("--phase", help="terrain the field becomes on the boss's first action; ends at her death")
+            s.add_argument("--summons", help="--phase: summons removed when the boss dies, a,b")
             s.add_argument("--seed", type=int)
         else:
             s.add_argument("--threat", default="moderate")
         s.add_argument("--json", action="store_true")
         s.set_defaults(fn=fn)
     t = sub.add_parser("tracker", help="initiative and HP tracker")
-    t.add_argument("action", choices=["init", "add", "hit", "heal", "next", "late", "cond", "effect", "clock", "poison", "countdown", "show"])
+    t.add_argument("action", choices=["init", "add", "hit", "heal", "next", "late", "cond", "effect", "clock", "poison", "curse", "rest", "countdown", "show"])
+    t.add_argument("--stack", type=int, help="curse: dose steps (default 3, or the number of step labels)")
+    t.add_argument("--clear-flag", help="curse: the flag that clears it, e.g. blessed")
+    t.add_argument("--upkeep", help="curse: a save every interval, e.g. 24h; a failure voids that rest")
+    t.add_argument("--failed", action="store_true", help="rest: the upkeep save failed")
     t.add_argument("--owner", help="countdown: the combatant whose turn turns the die down")
     t.add_argument("--save-each", action="store_true", help="poison: a save every round, not only at a stage change")
     t.add_argument("--dc", type=int, help="poison: save DC shown with each save")
@@ -8472,7 +8920,11 @@ def main(argv=None):
     s = sub.add_parser("sheet", help="character JSON to markdown sheet")
     s.add_argument("character"); s.add_argument("--out"); s.set_defaults(fn=cmd_sheet)
     s = sub.add_parser("check", help="check a character JSON")
-    s.add_argument("character"); s.set_defaults(fn=cmd_check)
+    s.add_argument("character", nargs="?")
+    s.add_argument("--lint", action="store_true", help="the file is check cards: 2+ stacked mods warn, fail tag needed")
+    s.add_argument("--uncertain", action="store_true", help="hidden GM roll: full, partial or false result")
+    s.add_argument("--dc", type=int); s.add_argument("--bonus", type=int, default=0); s.add_argument("--seed", type=int)
+    s.set_defaults(fn=cmd_check)
     s = sub.add_parser("prep", help="check a session prep card")
     s.add_argument("card"); s.add_argument("--leads", type=int, default=3)
     s.add_argument("--hours", type=float, help="session length; warns on more fights than fit (1 an hour, a 4e-grid number)")
@@ -8488,6 +8940,9 @@ def main(argv=None):
     s.add_argument("--end", help="HH:MM the session ends; prints when the climax must start")
     s.add_argument("--climax-min", type=int, default=45, help="minutes the final scene needs")
     s.add_argument("--cues", type=int, nargs="?", const=3, help="leads with a cue: line needed (default 3)")
+    s.add_argument("--players", help="players JSON [{name, wants, engagement}]; scenes carry serves: and lead:")
+    s.add_argument("--finale", action="store_true", help="## Finale beats: every conflict: tag paid, a duel per PC")
+    s.add_argument("--pcs", help="--finale: PC names a,b (else ## PCs)")
     s.set_defaults(fn=cmd_prep)
     s = sub.add_parser("combat-log", help="turn times of a real fight from a CSV log")
     s.add_argument("log"); s.add_argument("--budget", type=float, default=90); s.add_argument("--gm", default="GM")
@@ -8496,6 +8951,8 @@ def main(argv=None):
     s.add_argument("card"); s.add_argument("--finale", action="store_true")
     s.add_argument("--session", type=int, help="the current session number (default: the latest opened)")
     s.add_argument("--stale", type=int, default=3, help="flag open threads older than this many sessions")
+    s.add_argument("--spotlight", action="store_true", help="every PC owns a thread, none over 40%%, conflicts name a foe")
+    s.add_argument("--pcs", help="--spotlight: PC names a,b (else ## PCs)")
     s.set_defaults(fn=cmd_threads)
     s = sub.add_parser("session-log", help="print a session log template that feeds the next prep card")
     s.add_argument("--session", type=int, default=1); s.set_defaults(fn=cmd_sessionlog)
@@ -8519,6 +8976,7 @@ def main(argv=None):
     s.add_argument("--dice", help="table check: the dice rolled on it, e.g. 2d10 or d100")
     s.add_argument("--filter", action="append", help="combine: keep rows where column key=value (blank or any always match)")
     s.add_argument("--band", action="store_true", help="CSV power,severity: mishaps must not get milder as power rises")
+    s.add_argument("--columns", action="store_true", help="roll: each column on its own roll")
     s.set_defaults(fn=cmd_table)
     s = sub.add_parser("mystery", help="check a mystery's clues and suspects")
     s.add_argument("file"); s.add_argument("--every-suspect", action="store_true",
@@ -8533,11 +8991,14 @@ def main(argv=None):
     s.add_argument("items"); s.set_defaults(fn=cmd_item)
     s = sub.add_parser("villain", help="check villain cards")
     s.add_argument("card"); s.add_argument("--escapes", action="store_true", help="warn when an escape method repeats")
+    s.add_argument("--clues", help="clues JSON [{points_to, reveals}]: counts clues pointing at each villain")
     s.set_defaults(fn=cmd_villain)
     s = sub.add_parser("twist", help="check a set of planned twists")
-    s.add_argument("twists"); s.set_defaults(fn=cmd_twist)
+    s.add_argument("twists"); s.add_argument("--prophecy", action="store_true", help="the file is prophecies: if/when, goal, symbols")
+    s.set_defaults(fn=cmd_twist)
     s = sub.add_parser("campaign", help="check a campaign plan")
     s.add_argument("plan"); s.add_argument("--signs", type=int, default=3, help="foreshadowing signs wanted per climax")
+    s.add_argument("--pacing", action="store_true", help="sessions: advances, a stake raise, side share, hooks, warnings")
     s.set_defaults(fn=cmd_campaign)
     s = sub.add_parser("hooks", help="check a city hook deck")
     s.add_argument("deck"); s.set_defaults(fn=cmd_hooks)
@@ -8551,6 +9012,7 @@ def main(argv=None):
     s.set_defaults(fn=cmd_venues)
     s = sub.add_parser("party", help="check PC ties, plot ties and plan B for reveals")
     s.add_argument("file"); s.add_argument("--roles", help="comma list of roles the party needs (else the file's roles)")
+    s.add_argument("--check-stakes", action="store_true", help="each PC: goal, stake, blocker and 2+ threads")
     s.set_defaults(fn=cmd_party)
     s = sub.add_parser("strength", help="average party level and party strength against the target")
     s.add_argument("levels", type=int, nargs="+"); s.add_argument("--target-level", type=int, required=True)
@@ -8793,7 +9255,13 @@ def main(argv=None):
     s.add_argument("--teleport", action="store_true", help="teleport tables: every result reaches an exit; a bypass")
     s.add_argument("--hooks", action="store_true", help="hooks gated by a check need later: how they resolve")
     s.add_argument("--shift", action="store_true", help="day and night occupants per room; rank-gated stairs need a guard")
+    s.add_argument("--skip", help="a shortcut door: rooms and awards cut off when it opens first")
+    s.add_argument("--rally", help="a foe: fleeing foes join their finale force; min and max")
     s.add_argument("file"); s.set_defaults(fn=cmd_rooms)
+    s = sub.add_parser("escort", help="escort an NPC along a route: flee and rejoin, patience, survival XP")
+    s.add_argument("file"); s.add_argument("name"); s.add_argument("--route", required=True)
+    s.add_argument("--patience", type=int, default=3, help="linger points before the escort goes on alone (ours)")
+    s.set_defaults(fn=cmd_escort)
     s = sub.add_parser("session-end", help="rounds left and the final turns")
     s.add_argument("--seed", type=int); s.add_argument("--die", type=int, default=6)
     s.add_argument("--drop", type=int, action="append"); s.add_argument("--players", required=True)

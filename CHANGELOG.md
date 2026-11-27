@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.37.0 (2026-11-27)
+- `threads --spotlight`: every PC owns a thread, no PC over 40% of threads, conflict threads name what they oppose. Idea inspired by Beyond Role and Play.
+- `party --check-stakes`: each PC has a goal, a stake, an exit blocker and 2+ threads. Idea inspired by Beyond Role and Play.
+- `campaign --pacing`: every session advances the plot, a stake raise before the finale, non-plot scenes under 50%, sessions end on a hook, a deadly scene needs an earlier warning, combat under 70%. Idea inspired by the Complete Kobold Guide to Game Design.
+- `prep --players FILE`: players' wanted payoffs against scenes' `serves:`; warns for a player no scene serves and a low-engagement player given a lead. Idea inspired by Robin's Laws of Good Game Mastering.
+- `prep --finale`: each earlier `conflict:` needs a finale beat, a duel with an opponent per PC, beats in mayhem, duel, resolution order. Idea inspired by DM Design Kit I.
+- `villain --clues FILE` and `stimuli:`/`weakness:` lint: each needs a planted clue; counts villain-pointing clues. Merged the asked-for `clues --villain` into `villain`. Idea inspired by DM Design Kit I and If Looks Could Kill.
+- `rooms --skip DOOR`: rooms, XP and awards cut off when a shortcut door opens first. Idea inspired by If Looks Could Kill.
+- `escort FILE NAME --route A,B,C`: a new command; flee-and-rejoin per foe room, a patience count for lingering, survival XP. Idea inspired by If Looks Could Kill.
+- `rooms --rally FOE`: fleeing foes join a named ally's finale force; min and max. Idea inspired by Something Wicked.
+- `tracker curse` and `tracker rest`: a dose-step affliction (save on the first dose only, last step permanent until a clear flag), an upkeep save per interval that voids a rest on failure. Built beside `tracker poison`. Idea inspired by Something Wicked.
+- `encounter --phase TERRAIN [--summons]`: terrain changes on the boss's first action, ends at her death, stranded summons removed; warns against also counting it as `--hazard` XP. Idea inspired by That Sinking Feeling.
+- `twist --prophecy`: if/when tag, a PC-side goal for a when prophecy, a referent and a 2+ hint ladder per symbol. Idea inspired by the Ravenloft Dungeon Master's Guide.
+- `check --lint` (2+ stacked modifiers, a safe/hazardous/fateful fail tag) and `check --uncertain` (hidden GM roll, full/partial/false, our odds). Idea inspired by the MegaTraveller Referee's Manual.
+- `table roll [--columns]` and d1000 as a standard die: three d10s, each column on its own roll. Idea inspired by Plot Twists.
+- All numbers are ours and settable; no book text or tables copied. 13 new tests.
+
 ## 0.36.0 (2026-11-26)
 - `weather --days N [--band ..] [--view gm|player]`: one step of daily drift at most inside a region and season band; each extra day stuck at an edge pushes harder back toward the middle; a gust peak, then half that wind the rest of the day; the player view hides rolls and numbers. Merged into `weather` (its file is optional with `--days`). Idea inspired by the Wilderness Survival Guide.
 - `travel --navigate N --navigators K`: merged into the existing `--navigate`; a secret roll per navigator a day, a failure veers 90 degrees, the worst roll failed by 5+ reverses, and differing calls print a disagreement for the players to settle. Moon and dark light make it harder. Idea inspired by the Wilderness Survival Guide.

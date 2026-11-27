@@ -1,6 +1,6 @@
 {
   "name": "tablewright",
-  "version": "0.36.0",
+  "version": "0.37.0",
   "description": "Tabletop RPG table work for Pathfinder 2e, Starfinder 2e and D&D 5e (2024): encounter XP budgets and threat bands, an initiative and HP tracker, character sheets from JSON, and routing to character builders, battle maps and printable minis.",
   "author": {
     "name": "Mark Rogers"
