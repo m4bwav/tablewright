@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.43.0 (2026-11-27)
+- `adventure --false-patron`: lints a patron secretly behind the problem: real motive, what they know, a betrayal trigger and an escape route (errors), go-betweens and a tell (warnings). Idea inspired by Greyhawk Adventures.
+- `site --bluffs N [--guardian G]`: N layered deterrents, all fake but one real guard hidden among them, then a guardian layer that breaks after a third of it falls. Idea inspired by Greyhawk Adventures.
+- `npcs --whereabouts morning|day|evening|night`: where a key NPC is by time of day (home, out, disguised in the crowd), with a d100 roll; the card is now optional with this flag. Idea inspired by Greyhawk Adventures.
+- `venues --den [--cap N]`: a gambling den night: crowd size, the house's nightly payout cap, three simple dice games and two floor encounters in no fixed order; `--population` is no longer required with it. Idea inspired by Greyhawk Adventures.
+- `odds --shown safe|risky|deadly`: pairs the true chance with the level the GM describes; warns when the shown level is safer than the real odds. Idea inspired by Greyhawk Adventures.
+- `travel --carry [--hex-miles 6]`: day-by-day hexes with the part-hex carried over, and a push-on note when the goal sits in the current hex. Idea inspired by the Forgotten Realms Campaign Set.
+- `travel --transition FROM-TO [--left M]`: rest-of-day miles x0.5 into harder terrain (x0.25 at four times as hard), x1.5 out of it (x2). Idea inspired by the Forgotten Realms Campaign Set.
+- `wander --per-hex --status civilized|border|wild` (or `--city-miles`, `--town-miles`): one check per hex entered, 1 in 12, 8 or 6; civilized within 18 miles of a city or 6 of a town, border to double that; `--mixed` picks the harder terrain's table. Idea inspired by the Forgotten Realms Campaign Set.
+- `wander --build dX+dY`: a bell-shaped table from two different dice summed, each total's chance and band; a common slot may hold two rares. Idea inspired by the Forgotten Realms Campaign Set.
+- `rumors --calendar FILE`: news month by month with its lag, updates to earlier items, dead-end marks and items cancelled by PC action; hearing news before it happens or updating a later item fails. Idea inspired by the Forgotten Realms Campaign Set.
+- All merged into existing commands. All tables, numbers and words are ours. 10 new tests.
+
 ## 0.42.0 (2026-11-27)
 - `reaction --asked N --best-case L --worst-case L`: asking the same NPC again costs -1 per earlier ask, -2 each from the third; a per-NPC ceiling and floor clamp the band. Idea inspired by GURPS 4e Campaigns.
 - `odds "Q" --likely|--even|--unlikely`: a new command; a yes/no oracle for facts the GM has not decided, d100 against 75, 50 or 25, with "and" or "but" near the edges. Kept apart from `improvise --gut`, which sets a DC, not a fact. Idea inspired by GURPS 4e Campaigns.
