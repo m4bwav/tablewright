@@ -1748,6 +1748,7 @@ def cmd_tavern(a):
     for pc in pcs:
         if not any(pc in h.get("for", []) for h in t.get("hooks", [])):
             warns.append(f"no hook for {pc}")
+    staff_check(t, warns)
     report(errs, warns, f"{role} card {t.get('name', '?')}")
 
 
@@ -1864,6 +1865,8 @@ def cmd_mystery(a):
                 warns.append(f"schedule {n}: at {at} comes before the previous entry ({last}); keep times ascending")
             last = at
         seen.add(n)
+    if getattr(a, "payload", False):
+        mystery_payload(m, clues, errs, warns)
     if a.every_suspect:
         for su in sus:
             n = su.get("name", "?")
@@ -2882,6 +2885,8 @@ def cmd_district(a):
               f"curfew {x.get('curfew', '?')} | owner {x.get('owner', '?')}")
     if any("neighbours" in x or "neighbors" in x for x in ds):
         warns += district_neighbours(ds)
+    if getattr(a, "visit", None):
+        warns += district_visit(ds, a.visit)
     report([], warns, f"{len(ds)} district card(s)")
 
 
@@ -3027,6 +3032,7 @@ def cmd_trap(a):
                 warns.append(f"{t.get('name') or '?'}: no {', '.join(miss)}")
     if a.reset:
         errs += trap_reset_errors(traps)
+    trap_fields_v033(traps, a, errs, warns)
     deadly = [t for t in traps if t.get("severity") == "deadly"]
     if deadly and len(deadly) * 2 > len(traps):
         warns.append(f"{len(deadly)} of {len(traps)} traps are deadly; most should cost resources, not lives")
@@ -3142,6 +3148,8 @@ def cmd_oneshot(a):
         else:
             roles.setdefault(r, []).append(n)
     oneshot_party(c, pre, errs, warns)
+    if getattr(a, "newbies", False):
+        oneshot_newbies(c, roles, errs, warns)
     for r, ns in roles.items():
         if len(ns) > 1:
             warns.append(f"{' and '.join(ns)} share the role {r}; give each pregen its own job")
@@ -3758,7 +3766,7 @@ def cmd_awards(a):
     """Session logs (oldest first): 'award: player | kind | ability | reason | xp', 'milestone: player', 'coins: player N'."""
     errs, warns, last, players = [], [], [], set()
     for path in a.logs:
-        seen, ms, coins = {}, set(), {}
+        seen, ms, coins, procs = {}, set(), {}, {}
         for ln in Path(path).read_text(encoding="utf-8").splitlines():
             k, _, v = ln.strip().lstrip("-* ").partition(":")
             k = k.strip().lower()
@@ -3776,6 +3784,8 @@ def cmd_awards(a):
                     if seen[key] == 2:
                         warns.append(f"{path}: {pl} got {ab} awarded twice this session; reward something new")
                 print(" ".join(x for x in (f"{pl}:", kind or "award", ab, xp, f"({reason or 'no reason'})") if x))
+            elif k in ("process", "end"):
+                awards_v033(k, v, path, ln, procs, errs, warns)
             elif k == "milestone":
                 pl = v.strip()
                 players.add(pl)
@@ -3788,6 +3798,8 @@ def cmd_awards(a):
                     coins[pl] = coins.get(pl, 0) + int(n)
                 except ValueError:
                     errs.append(f"{path}: coins line wants 'player N': {ln.strip()}")
+        if procs:
+            print(f"{path}: process XP " + ", ".join(f"{k} {v}" for k, v in sorted(procs.items())))
         for pl, n in coins.items():
             if n > COIN_CAP:
                 warns.append(f"{path}: {pl} got {n} coins in one session (over {COIN_CAP}, our default)")
@@ -3844,6 +3856,7 @@ def cmd_rooms(a):
     e2, w2 = rooms_extras(a, rooms)
     errs += e2
     warns += w2
+    rooms_v033(rooms, errs, warns)
     report(errs, warns, f"{len(rooms)} rooms")
 
 
@@ -5938,6 +5951,7 @@ def cmd_site(a):
         site_lair(d, errs, warns)
     if a.snitch:
         site_snitch(d, warns)
+    prior_party_check(d.get("prior_party"), "site", warns)
     site_factions(d, warns)
     report(errs, warns, f"site {d.get('location', '?')}, {len(entries)} entries")
 
@@ -6950,9 +6964,10 @@ def wander_table(path):
     calm = sum(r.get("weight", 1) for r in rows if not r.get("combat"))
     share = calm / total if total else 0
     print(f"table: {len(rows)} entries, non-combat share {share:.0%}")
+    out = wander_table_v033(rows)
     if share < WANDER_CALM_MIN:
-        return [f"non-combat share {share:.0%} under {WANDER_CALM_MIN:.0%}: add signs, travellers or events so not every roll is a fight"]
-    return []
+        out.append(f"non-combat share {share:.0%} under {WANDER_CALM_MIN:.0%}: add signs, travellers or events so not every roll is a fight")
+    return out
 
 
 def doom_rests(a):
@@ -7231,6 +7246,233 @@ def cmd_sandbox(a):
                         f"{len(enc)} encounters, {len(rum)} rumors")
 
 
+# ---- 0.33.0: clue payloads, district visits, trap fields and clocks, newbie one-shots, process XP, table origins ----
+
+CLUE_PAYLOAD = {"foe": 2, "backstory": 2, "work": 1, "lead": 1}  # payload value per tag; our weights
+CLUE_COST = {"easy": 1, "medium": 2, "hard": 3}  # what a difficulty costs the table; our scale
+
+
+def mystery_payload(m, clues, errs, warns):
+    """--payload: each clue's tags (foe, backstory, work, lead) and difficulty; fake clues need planted_by and why."""
+    hard, facts = 0, {}
+    for i, c in enumerate(clues, 1):
+        n = c.get("id") or c.get("name") or f"clue {i}"
+        tags = c.get("payload") or []
+        tags = [tags] if isinstance(tags, str) else tags
+        bad = [t for t in tags if t not in CLUE_PAYLOAD]
+        if bad:
+            errs.append(f"{n}: payload {', '.join(map(str, bad))}; use " + ", ".join(CLUE_PAYLOAD))
+        if not tags:
+            warns.append(f"{n}: no payload (what finding it lets the party do)")
+        if c.get("fake"):
+            for k, why in (("planted_by", "who left it"), ("why", "what they want the party to think")):
+                if not c.get(k):
+                    errs.append(f"{n}: fake clue with no {k} ({why})")
+        if "backstory" in tags and c.get("fact"):
+            facts[c["fact"]] = n
+        diff = str(c.get("difficulty", "medium")).lower()
+        if diff not in CLUE_COST:
+            errs.append(f"{n}: difficulty {diff!r}; use " + ", ".join(CLUE_COST))
+            continue
+        value = sum(CLUE_PAYLOAD.get(t, 0) for t in tags)
+        hard += diff == "hard"
+        if tags and CLUE_COST[diff] > value:
+            warns.append(f"{n}: {diff} (cost {CLUE_COST[diff]}) for a payload worth {value}; make it easier or make it carry more")
+    if clues and hard * 2 > len(clues):
+        warns.append(f"{hard} of {len(clues)} clues are hard; most should be easy or medium")
+    for f in m.get("backstory") or []:
+        if f not in facts:
+            warns.append(f"backstory fact {f!r} has no clue (payload backstory with fact: that text)")
+
+
+DISTRICT_VISIT = {  # prep depth per visit type; our lists
+    "shopping": ("goods", "prices"),
+    "mission": ("contact", "obstacle", "exit"),
+    "exploration": ("sights", "rumour", "neighbours"),
+}
+
+
+def district_visit(ds, kind):
+    """--visit: the fields this kind of visit needs, plus a first-visit capsule (one image, one risk or benefit)."""
+    need = DISTRICT_VISIT[kind]
+    print(f"{kind} visit: prep " + ", ".join(need) + "; first visit: one image, one personal risk or benefit")
+    warns = []
+    for x in ds:
+        n = x.get("name") or "?"
+        miss = [k for k in need if not (x.get(k) or (k == "neighbours" and x.get("neighbors")))]
+        if miss:
+            warns.append(f"{n}: {kind} visit with no {', '.join(miss)}")
+        fv = x.get("first_visit") or {}
+        if not fv.get("image"):
+            warns.append(f"{n}: first_visit has no image (one thing they see, hear or smell)")
+        if not (fv.get("risk") or fv.get("benefit")):
+            warns.append(f"{n}: first_visit has no risk or benefit for a PC")
+    return warns
+
+
+def trap_fields_v033(traps, a, errs, warns):
+    """kind mechanical|magical, detect_dc/confirm_dc/tell, built traps' bypass, failed disarm, save every turn; --complex."""
+    for t in traps:
+        n = t.get("name") or "?"
+        k = t.get("kind")
+        if k == "magical":
+            dis = t.get("disable")
+            ways = [w for w in (dis if isinstance(dis, list) else [dis]) if w]
+            if ways and all("thiever" in str(w).lower() for w in ways):
+                warns.append(f"{n}: magical trap countered only by thievery; add a dispel or arcane route")
+        dd, cd = t.get("detect_dc"), t.get("confirm_dc")
+        if isinstance(dd, int) and isinstance(cd, int) and cd < dd:
+            warns.append(f"{n}: confirm_dc {cd} below detect_dc {dd}; knowing what it does should not be easier than spotting it")
+        tell = t.get("tell")
+        if isinstance(tell, dict) and isinstance(dd, int) and isinstance(tell.get("dc"), int) and tell["dc"] >= dd:
+            warns.append(f"{n}: tell DC {tell['dc']} is not under detect_dc {dd}; a tell is the easy hint")
+        if t.get("built") and not t.get("bypass"):
+            warns.append(f"{n}: built trap with no bypass (how its makers get past; write 'none' if they cannot)")
+        if (k in ("mechanical", "magical") or t.get("built") or dd is not None) and t.get("disable") and not t.get("disarm_fail"):
+            warns.append(f"{n}: no disarm_fail (what a failed disarm does)")
+        if t.get("save_every_turn") and not t.get("immunity"):
+            warns.append(f"{n}: a save every turn with no immunity (a pass should end it or protect a while)")
+        if t.get("lockdown"):
+            door = t.get("door") or {}
+            miss = [x for x in ("ac", "hp", "pick_dc") if door.get(x) is None]
+            if miss:
+                errs.append(f"{n}: lockdown door has no {', '.join(miss)}")
+            if not t.get("exit"):
+                errs.append(f"{n}: lockdown with no exit (the way out besides the door)")
+        if getattr(a, "complex", False):
+            trap_clock(t, n, errs, warns)
+
+
+def trap_clock(t, n, errs, warns):
+    """Round clock: start, per_round, harm_at; prints the round harm starts (the hazard counter math)."""
+    c = t.get("complex")
+    if not isinstance(c, dict):
+        warns.append(f"{n}: --complex but no complex clock")
+        return
+    per, at, start = c.get("per_round"), c.get("harm_at"), c.get("start", 0)
+    if not (isinstance(per, int) and per > 0 and isinstance(at, int)):
+        errs.append(f"{n}: complex wants per_round (above 0) and harm_at as numbers")
+        return
+    rnd = max(1, math.ceil((at - start) / per))
+    print(f"{n}: harm starts in round {rnd} if nobody acts")
+    if rnd < 2:
+        warns.append(f"{n}: harm in round {rnd}; the party gets no turn first")
+    for k, why in (("delay_action", "what a PC does to push the clock back"), ("end", "what stops it for good")):
+        if not c.get(k):
+            warns.append(f"{n}: complex with no {k} ({why})")
+
+
+NEWBIE_FIELDS = (("teaches", "the one rule it shows"), ("soft_fail", "what failing costs, short of death"),
+                 ("retry_easier_by", "how much easier a second try is"), ("debrief", "what to say after"),
+                 ("ally_gain", "who or what the party gains"))
+
+
+def oneshot_newbies(c, roles, errs, warns):
+    """--newbies: each scenario has the teaching fields; instant death at level 1 needs backups; every role a spotlight."""
+    sc = c.get("scenarios") or []
+    if not sc:
+        errs.append("--newbies: no scenarios")
+    lit = set()
+    for i, x in enumerate(sc, 1):
+        n = x.get("name") or f"scenario {i}"
+        for k, why in NEWBIE_FIELDS:
+            if x.get(k) in (None, ""):
+                warns.append(f"{n}: no {k} ({why})")
+        if x.get("instant_death") and c.get("level", 1) <= 1 and not c.get("backups"):
+            warns.append(f"{n}: instant death at level 1 with no backup characters")
+        sp = x.get("spotlight") or []
+        lit |= {str(r).lower() for r in ([sp] if isinstance(sp, str) else sp)}
+    for r in sorted(roles):
+        if r not in lit:
+            warns.append(f"role {r}: no scenario puts it in the spotlight")
+
+
+AWARD_PROCESS = ("camp", "investigation", "roleplay", "ambush")
+AWARD_ENDS = ("killed", "fled-without", "fled-with")
+
+
+def awards_v033(k, v, path, ln, procs, errs, warns):
+    """'process: player | kind | xp' (ambush is per spotter) and 'end: state | xp' with graded end states."""
+    f = [x.strip() for x in v.split("|")] + ["", "", ""]
+    if k == "process":
+        pl, kind, xp = f[:3]
+        if kind.lower() not in AWARD_PROCESS:
+            warns.append(f"{path}: process kind {kind!r}; use " + ", ".join(AWARD_PROCESS))
+        try:
+            procs[kind.lower()] = procs.get(kind.lower(), 0) + int(xp)
+        except ValueError:
+            errs.append(f"{path}: process line wants 'player | kind | xp': {ln.strip()}")
+        return
+    state, xp = f[0].lower(), f[1]
+    if state not in AWARD_ENDS:
+        errs.append(f"{path}: end {state!r}; use " + ", ".join(AWARD_ENDS))
+    print(f"{path}: end state {state} ({xp or 'no'} XP)")
+
+
+def wander_table_v033(rows):
+    """Entries may carry from (hex) and purpose, meets [A, B], soft with complication % (1 to 100)."""
+    out, names = [], {r.get("name") for r in rows}
+    for r in rows:
+        n = r.get("name", "?")
+        if r.get("from") and not r.get("purpose"):
+            out.append(f"{n}: comes from {r['from']} with no purpose (why are they on the road)")
+        m = r.get("meets")
+        if m is not None:
+            if not (isinstance(m, list) and len(m) == 2):
+                out.append(f"{n}: meets wants two entry names [A, B]")
+            else:
+                out += [f"{n}: meets {x!r}, not on the table" for x in m if x not in names]
+        if r.get("soft"):
+            p = r.get("complication")
+            if not (isinstance(p, int) and 1 <= p <= 100):
+                out.append(f"{n}: soft entry with no complication % (1 to 100)")
+    return out
+
+
+ROOM_ALARM = ("fight", "flee", "warn", "hide", "parley")
+
+
+def rooms_v033(rooms, errs, warns):
+    """Per-room alarm stance and lookout rounds; prior_party."""
+    for r in rooms:
+        n = r.get("name", "?")
+        al = r.get("alarm")
+        if al is not None and str(al).lower() not in ROOM_ALARM:
+            warns.append(f"{n}: alarm {al!r}; use " + ", ".join(ROOM_ALARM))
+        lo = r.get("lookout")
+        if lo is not None and not (isinstance(lo, int) and lo >= 0):
+            errs.append(f"{n}: lookout {lo!r}; rounds before the lookout raises the alarm, a whole number")
+        if str(al).lower() == "warn" and lo is None:
+            warns.append(f"{n}: alarm warn with no lookout rounds")
+        prior_party_check(r.get("prior_party"), n, warns)
+
+
+def prior_party_check(pp, where, warns):
+    """prior_party {fate, left}: an earlier group that came through; what happened to them and what they left."""
+    if pp is None:
+        return
+    pp = pp if isinstance(pp, dict) else {}
+    for k, why in (("fate", "what became of them"), ("left", "what they left for the party to find")):
+        if not pp.get(k):
+            warns.append(f"{where}: prior_party with no {k} ({why})")
+
+
+def staff_check(t, warns):
+    """Tavern staff: each with role, secret and one tie to another named NPC on the card."""
+    staff = t.get("staff") or []
+    names = {x.get("name") for x in staff} | {x.get("name") for x in t.get("npcs") or [] if isinstance(x, dict)}
+    for x in staff:
+        n = x.get("name", "?")
+        for k in ("role", "secret"):
+            if not x.get(k):
+                warns.append(f"staff {n}: no {k}")
+        tie = x.get("tie")
+        if not tie:
+            warns.append(f"staff {n}: no tie to another NPC")
+        elif tie not in names or tie == n:
+            warns.append(f"staff {n}: tie {tie!r} is not another NPC on this card")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -7344,6 +7586,8 @@ def main(argv=None):
     s = sub.add_parser("mystery", help="check a mystery's clues and suspects")
     s.add_argument("file"); s.add_argument("--every-suspect", action="store_true",
                                            help="each suspect needs could_have and a clue pointing at them")
+    s.add_argument("--payload", action="store_true",
+                   help="clue payload tags and difficulty; backstory facts need a clue; fake clues need planted_by and why")
     s.set_defaults(fn=cmd_mystery)
     s = sub.add_parser("safety", help="check a table safety plan")
     s.add_argument("file"); s.add_argument("--party", help="party.json; every PC's player must confirm")
@@ -7469,7 +7713,9 @@ def main(argv=None):
     s.add_argument("--seed", type=int); s.add_argument("--die", type=int, help="use this d100 result")
     s.set_defaults(fn=cmd_hirelings)
     s = sub.add_parser("district", help="check city district prep cards")
-    s.add_argument("file"); s.set_defaults(fn=cmd_district)
+    s.add_argument("file"); s.add_argument("--visit", choices=list(DISTRICT_VISIT),
+                                           help="prep depth for this kind of visit plus a first-visit capsule check")
+    s.set_defaults(fn=cmd_district)
     s = sub.add_parser("chase", help="city pursuit tracker")
     s.add_argument("--lead", type=int, default=3); s.add_argument("--escape", type=int, default=6)
     s.add_argument("--rounds", type=int, default=10); s.add_argument("--table", help="file of 'complication;shift' lines")
@@ -7494,12 +7740,15 @@ def main(argv=None):
     s = sub.add_parser("trap", help="check traps: trigger, detection, disable, effect, severity")
     s.add_argument("file"); s.add_argument("--full", action="store_true", help="also want avoid, reset and alarm")
     s.add_argument("--reset", action="store_true", help="a trap with guards: PUZZLE needs reset and retry")
+    s.add_argument("--complex", action="store_true", help="round clock per trap (complex {per_round, harm_at, ...})")
     s.set_defaults(fn=cmd_trap)
     s = sub.add_parser("downtime", help="check downtime activities: time, cost or sink, outcomes")
     s.add_argument("file", nargs="?"); s.add_argument("--preset", choices=sorted(DOWNTIME_PRESETS))
     s.set_defaults(fn=cmd_downtime)
     s = sub.add_parser("oneshot", help="check a one-shot card: bond, plot, finish, pregens")
-    s.add_argument("card"); s.set_defaults(fn=cmd_oneshot)
+    s.add_argument("card"); s.add_argument("--newbies", action="store_true",
+                                           help="first-session card: each scenario teaches, forgives and debriefs")
+    s.set_defaults(fn=cmd_oneshot)
     s = sub.add_parser("fightcard", help="check a fight card: tiers that change tactics, escape hatches")
     s.add_argument("file"); s.set_defaults(fn=cmd_fightcard)
     s = sub.add_parser("sandbox", help="check a hex sandbox kit (sandbox.json): keys, homes, rumors, clash, factions")
