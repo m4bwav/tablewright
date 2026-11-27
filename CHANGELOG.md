@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.27.0 (2026-11-26)
+- `item`: a `consumable` that works with no `roll` and names no `made_by` warns; free one-use magic needs a creation sink. Idea inspired by ICRPG Magic, p. 25.
+- `table FILE --band` (CSV `power,severity`): a stronger row whose mishap is milder than a weaker one fails. Idea inspired by ICRPG Magic, p. 22.
+- `tt.py mastery FILE --school S --trigger KIND --mark WHY [--cost N]`: a ledger of up to 4 marks per school, all from one trigger kind; the 4th mark halves the cost (rounded up, our rounding). Idea inspired by ICRPG Magic, p. 21.
+- `oneshot` `encounters`: warns outside 2 to 4, on no twist or a twist first or last, and on a finale that is not last. `prep --cues [N]`: N leads (default 3) need a `cue:` line. Ideas inspired by ICRPG Worlds, pp. 64, 110.
+- `tt.py ties party.json LOGS... [--stale 3]`: how often each PC bond (`tie: A-B`) and plot tie (`plot_tie: A`) shows up in session logs; never-used and stale bonds warn. Idea inspired by Altered State, pp. 6, 22.
+- All numbers are ours; no book text or tables copied. 6 new tests (244 total).
+
 ## 0.26.0 (2026-11-26)
 - `adventure --pacing pendulum|pit|vise`: fight difficulty in order against a shape (swinging, easy run then spike and plateau, only tightening with no rest); a pit spike two bands over the run needs `escape: true`. Idea inspired by the Ravenloft Dungeon Master's Guide.
 - `tt.py puzzle`: deadly puzzles need a warning, combination parts and the order clue are placed apart, 3+ hints not all GM-voiced at the start, `--have` covers needed items, `--hp` checks wrong tries cannot kill, critical-path puzzles open a door or fail forward; `--stall-after N` prints the hint schedule. Ideas inspired by Riddle Rooms 1 and 2 (Cloud Kingdom Games), pp. 2-5, 18, 29, 32-36.
