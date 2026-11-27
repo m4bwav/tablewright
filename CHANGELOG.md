@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.42.0 (2026-11-27)
+- `reaction --asked N --best-case L --worst-case L`: asking the same NPC again costs -1 per earlier ask, -2 each from the third; a per-NPC ceiling and floor clamp the band. Idea inspired by GURPS 4e Campaigns.
+- `odds "Q" --likely|--even|--unlikely`: a new command; a yes/no oracle for facts the GM has not decided, d100 against 75, 50 or 25, with "and" or "but" near the edges. Kept apart from `improvise --gut`, which sets a DC, not a fact. Idea inspired by GURPS 4e Campaigns.
+- `trap --rooms N`: warns when traps pass about 1 in 4 rooms. Idea inspired by GURPS 4e Campaigns.
+- `rooms --surrender`: an occupied room wants `schedule` and `surrender` or `flee`. Idea inspired by GURPS 4e Campaigns.
+- `cuts FILE`: a new command; a split-party cut plan ({pcs, knowledge_rule, cuts: [{group, tag, ends}]}): untagged cuts, a PC off stage past `--max-off` cuts, all cliffhangers, no knowledge rule. Idea inspired by DMGR5 Creative Campaigning.
+- `contest --a N --b N [--preset joust|archery]`: a new command; rounds of die plus bonus, a joust unhorses on a margin of 10, archery totals three ends; the loser becomes a hook. Idea inspired by DMGR5 Creative Campaigning (presets from DMGR2 Castle Guide).
+- `rumors --retold N [--event TEXT --size N]`: a true event's scale grows by half each retelling and each teller adds a bias. Idea inspired by DMGR1 Campaign Sourcebook and Catacomb Guide.
+- `tpk --reprieve`: a cheat-death return paired with its price. Idea inspired by DMGR1 Campaign Sourcebook and Catacomb Guide.
+- `attendance --leaves [--combat]`: a player leaving mid-session: ranked options and warnings; `--present` is no longer required with it. Idea inspired by DMGR1 Campaign Sourcebook and Catacomb Guide.
+- `rooms --readaloud`: lints `read_aloud` for exact feet and words that tell players what they think. Idea inspired by DMGR1 Campaign Sourcebook and Catacomb Guide.
+- `war FILE [--peace --weeks N]`: a new command; a war plan needs cause, goals and stop; a weekly sue-for-peace roll that rises with time, goals met and losses. Idea inspired by DMGR2 Castle Guide.
+- `siege --phases`: assault waves from `assault` {attackers, defenders, waves, walls}: losses, morale shifts, and the walls fall, the defenders surrender or the assault is called off. Idea inspired by DMGR2 Castle Guide.
+- `morale --recover N [--day D]`: a morale penalty comes back a point a day; prints the day back to base. Idea inspired by DMGR2 Castle Guide.
+- `calendar --holidays [--months N]`: about one holiday every two months, weighted religious, farming, political, private. Idea inspired by DMGR2 Castle Guide.
+- `villain --org`, `--interview`, `--key`: organisation cards (delivers, resources, hierarchy or network, edge, change, conformity, 3+ audiences, procedures for a hierarchy, a committee of N takes Nd6 days); villain interview fields with one twist, one excess and a weakness traced `from:` a low score; the key that beats the weakness is not kept in the lair. Idea inspired by DMGR6 Complete Book of Villains.
+- `adventure --matrix linear|space|time|power`: time events need a date, space events a place, power wants a villain scene in the first third; an event with 3+ readings warns. Idea inspired by DMGR6 Complete Book of Villains.
+- `campaign --epic`: epic PCs with a borrowed identity and cover risk, observer or controller jobs, a hidden superior on the first job, a ranked goal ladder, a named judge. Idea inspired by the DM's Guide to Immortals.
+- Nothing was already built; all merged into existing commands except `odds`, `cuts`, `contest` and `war`. All tables, numbers and words are ours. 17 new tests.
+
 ## 0.41.0 (2026-11-27)
 - `trial --crime minor|serious|grave --advocate N --witnesses N --against N --evidence none|weak|strong --rank-gap N --rank R [--purse P --wage W]`: a new command; an opposed 2d6 court roll, days held before trial (halved when the accused outranks the accuser), a fine scaled by rank with a month to pay, then the sentence or debt servitude for what stays unpaid. Idea inspired by Lankhmar, City of Adventure.
 - `blaze FILE --start B [--brigade N] [--hours H]`: a new command; fire spreads hour by hour over a building adjacency list, oil-stored buildings catch more easily, every two bucket crews cut the spread target, buildings gut after 3 hours. Idea inspired by Lankhmar, City of Adventure.
