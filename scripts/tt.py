@@ -141,6 +141,11 @@ def band_for(total, budgets):
 
 
 def cmd_encounter(a):
+    if a.card:
+        return encounter_card(a.card)
+    for k in ("system", "level", "foe"):
+        if getattr(a, k) is None:
+            die(f"encounter needs --{k} (or --card FILE)")
     budgets = pf_budgets(a.party) if a.system != "5e" else dnd_budgets(a.party, a.level)
     total, notes = 0, []
     a.foe, roles = split_roles(a.foe)
@@ -1288,7 +1293,8 @@ def cmd_sessionlog(a):
 
 NPC_DEPTH = ("ideal", "bond", "flaw")
 NPC_EXTRA = ("major", "secret", "joins_party", "exit", "tactics", "but", "roles", "tell", "revealed",
-             "notice", "open", "goals", "recurring", "reacts", "danger", "questions", "survival")
+             "notice", "open", "goals", "recurring", "reacts", "danger", "questions", "survival",
+             "role", "activates", "central")
 
 
 def cmd_npcs(a):
@@ -1343,6 +1349,9 @@ def cmd_npcs(a):
     if getattr(a, "recurring", False):
         pcs = [x.strip() for x in (a.pcs or "").split(",") if x.strip()]
         for w in npcs_recurring(rows, pcs):
+            print("warn: " + w)
+    if getattr(a, "roles", False):
+        for w in npcs_roles(rows):
             print("warn: " + w)
     for e in errs:
         print("error: " + e)
@@ -3603,6 +3612,12 @@ def cmd_settlement(a):
         if pop > fed:
             warns.append(f"population {pop} is more than farmland and imports feed ({fed:g}); "
                          "more acres, food_imports, or famine as a hook")
+    if a.news:
+        settlement_news(c, i, warns)
+    if a.temples:
+        settlement_temples(c, warns)
+    if a.justice:
+        settlement_justice(c, warns)
     report(errs, warns, f"{c.get('name', 'settlement')}: {size}, {pop}")
 
 
@@ -3870,6 +3885,8 @@ def cmd_rooms(a):
     errs += e2
     warns += w2
     rooms_v033(rooms, errs, warns)
+    if a.shift:
+        rooms_shift(rooms, warns)
     report(errs, warns, f"{len(rooms)} rooms")
 
 
@@ -5594,9 +5611,17 @@ def cmd_doomtrack(a):
 
 def cmd_rumors(a):
     """Rumour or lead list JSON: each lead has a skill, a dc, what it reveals and where it points; mixed skills and DCs."""
+    if a.spread is not None:
+        rumor_spread(a)
+        if not a.file:
+            return
+    if not a.file:
+        die("rumors needs a file, or --spread BLOCKS")
     d = load_json(a.file)
     if isinstance(d, dict) and "rumors" in d:
-        return rumor_quests(d)
+        return rumor_quests(d, a)
+    if a.truth:
+        die("--truth wants {quests, rumors} with true: yes|no|partial|later")
     leads = d.get("leads") if isinstance(d, dict) else d
     errs, warns = [], []
     if not leads:
@@ -5630,7 +5655,7 @@ def cmd_rumors(a):
     report(errs, warns, f"{len(leads)} leads over {len(skills)} skills and {len(dcs)} dcs")
 
 
-def rumor_quests(d):
+def rumor_quests(d, a=None):
     """{quests: [id or {id}], rumors: [{text, quest, true: yes|no|later}]}: each rumour tied to a known quest."""
     quests = [q.get("id") if isinstance(q, dict) else q for q in d.get("quests") or []]
     rumors = d.get("rumors") or []
@@ -5646,11 +5671,13 @@ def rumor_quests(d):
             warns.append(f"{n}: quest {q} is not in quests")
         t = r.get("true")
         t = {True: "yes", False: "no"}.get(t, t)
-        if t not in ("yes", "no", "later"):
-            errs.append(f"{n}: true must be yes, no or later")
+        if t not in ("yes", "no", "partial", "later"):
+            errs.append(f"{n}: true must be yes, no or later (or partial)")
     for q in quests:
         if not any(r.get("quest") == q for r in rumors):
             warns.append(f"quest {q} has no rumour pointing at it")
+    if a is not None and a.truth:
+        rumor_truth(rumors, a.max_true, warns)
     report(errs, warns, f"{len(rumors)} rumours over {len(quests)} quests")
 
 
@@ -5976,6 +6003,10 @@ def cmd_site(a):
         site_purpose(d, a.purpose, warns)
     if a.water:
         site_water(d, warns)
+    if a.stronghold:
+        site_stronghold(d, warns)
+    if a.access:
+        site_access(d, a.access, warns)
     report(errs, warns, f"site {d.get('location', '?')}, {len(entries)} entries")
 
 
@@ -7663,16 +7694,250 @@ def realm_grants(d, errs, warns):
               + (f"; or {x['opt_out']}" if x.get("opt_out") else ""))
 
 
+ENC_TYPES = ("combat", "roleplay", "puzzle")
+ENC_FUNCTIONS = ("hook", "obstacle", "prospect")
+ENC_POINTS = ("endpoint", "turning", "intermediate")
+
+
+def encounter_card(path):
+    """encounters [{name, type, function [hook|obstacle|prospect], point, arc, random, outlives}]."""
+    encs = load_list(path, "encounters")
+    errs, warns, arcs = [], [], {}
+    for i, e in enumerate(encs, 1):
+        n = e.get("name", f"encounter {i}")
+        if e.get("type") not in ENC_TYPES:
+            errs.append(f"{n}: type {e.get('type')!r}, use " + "|".join(ENC_TYPES))
+        fn = e.get("function") or []
+        fn = [fn] if isinstance(fn, str) else fn
+        if not fn:
+            warns.append(f"{n}: no function (hook, obstacle or prospect); why is it in the adventure")
+        for f in fn:
+            if f not in ENC_FUNCTIONS:
+                errs.append(f"{n}: function {f!r}, use " + "|".join(ENC_FUNCTIONS))
+        if e.get("point") not in ENC_POINTS:
+            errs.append(f"{n}: point {e.get('point')!r}, use " + "|".join(ENC_POINTS))
+        arcs.setdefault(e.get("arc") or "main", []).append(e.get("point"))
+        if e.get("random") and e.get("type") == "combat" and "hook" in fn and not e.get("outlives"):
+            warns.append(f"{n}: a random fight tagged hook with nothing that outlives it (outlives: a clue, a survivor, a map)")
+    for arc, pts in arcs.items():
+        if "endpoint" not in pts:
+            warns.append(f"arc {arc}: no endpoint; say where it ends")
+    report(errs, warns, f"{len(encs)} encounters over {len(arcs)} arc(s)")
+
+
+NPC_ROLES = ("patron", "ally", "neutral", "hinderer", "competitor", "enemy", "wild card")
+
+
+def npcs_roles(rows):
+    """rows: (name, extra). role: one or more of NPC_ROLES (a | b), activates: when it comes into play."""
+    w = []
+    for n, e in rows:
+        rs = [x.strip().lower() for x in e.get("role", "").split("|") if x.strip()]
+        if not rs:
+            w.append(f"{n}: no role: (" + ", ".join(NPC_ROLES) + ")")
+            continue
+        for r in rs:
+            if r not in NPC_ROLES:
+                w.append(f"{n}: role {r!r} is not one of " + ", ".join(NPC_ROLES))
+        if not e.get("activates"):
+            w.append(f"{n}: no activates: (the condition that brings the role into play)")
+        if "hinderer" in rs and not e.get("tell"):
+            w.append(f"{n}: hinderer with no tell: (a sign players can spot before it bites)")
+        if e.get("central", "").lower() in ("true", "yes"):
+            w.append(f"{n}: central: yes, more central than the PCs; let the PCs drive the story")
+    return w
+
+
+def cmd_triggers(a):
+    """triggers [{if, then, bound: true|false, offstage, visible}]: every THEN shows the PCs something."""
+    ts = load_list(a.file, "triggers")
+    errs, warns, nb = [], [], 0
+    for i, t in enumerate(ts, 1):
+        n = t.get("name", f"trigger {i}")
+        for k in ("if", "then"):
+            if not t.get(k):
+                errs.append(f"{n}: no {k}")
+        if not isinstance(t.get("bound"), bool):
+            errs.append(f"{n}: bound must be true (tied to a place or time) or false (fires wherever the PCs are)")
+        nb += t.get("bound") is True
+        if not t.get("visible"):
+            warns.append(f"{n}: THEN has no visible result for the PCs" + (" (offstage)" if t.get("offstage") else "")
+                         + "; add visible: what they see, hear or find")
+        print(f"IF {t.get('if', '?')} THEN {t.get('then', '?')}"
+              + (" [bound]" if t.get("bound") else " [unbound]") + (" [offstage]" if t.get("offstage") else ""))
+    report(errs, warns, f"{len(ts)} triggers, {nb} bound, {len(ts) - nb} unbound")
+
+
+NEWS_RATE = 1.0  # city blocks hot news travels an hour; ours
+
+
+def rumor_spread(a):
+    """Hot news moves a.rate blocks an hour from where it breaks."""
+    if a.rate <= 0:
+        die("--rate must be positive")
+    print(f"news at {a.rate:g} block(s) an hour")
+    print(f"district edge ({a.spread:g} blocks): {a.spread / a.rate:g} hours")
+    if a.edge is not None:
+        if a.edge < a.spread:
+            print(f"warn: --edge {a.edge:g} is closer than the district ({a.spread:g})")
+        print(f"city edge ({a.edge:g} blocks): {a.edge / a.rate:g} hours")
+
+
+RUMOR_TRUE_MAX = 0.25  # share of wholly true rumours, ours; set with --max-true
+
+
+def rumor_truth(rumors, ratio, warns):
+    vals = [{True: "yes", False: "no"}.get(r.get("true"), r.get("true")) for r in rumors]
+    yes, part = vals.count("yes"), vals.count("partial")
+    print(f"truth: {yes} true, {part} partial, {len(vals) - yes - part} false or later")
+    if rumors and yes / len(rumors) > ratio:
+        warns.append(f"{yes} of {len(rumors)} rumours are true, over {ratio:.0%}; keep true ones a small minority")
+    if not part:
+        warns.append("no partial rumours (true: partial); half-truths make players weigh them")
+
+
+NEWS_TIERS = (1, 1, 1, 2, 2, 3, 3, 4)  # news channels wanted per size band, thorp to metropolis; ours
+LAW_TIERS = (0, 0, 1, 1, 2, 3, 4, 5)  # law officers wanted per size band; ours
+
+
+def settlement_news(c, i, warns):
+    news = [str(x).lower() for x in c.get("news") or []]
+    law = [str(x).lower() for x in c.get("law") or []]
+    print(f"news: {len(news)} channel(s), want {NEWS_TIERS[i]}; law: {len(law)} officer(s), want {LAW_TIERS[i]}")
+    if len(news) < NEWS_TIERS[i]:
+        warns.append(f"{len(news)} news channels, a {c.get('size')} wants {NEWS_TIERS[i]}+ (crier, board, gossip hub, ...)")
+    if len(law) < LAW_TIERS[i]:
+        warns.append(f"{len(law)} law officers, a {c.get('size')} wants {LAW_TIERS[i]}+")
+    if i >= 5:
+        if not any("crier" in x for x in news):
+            warns.append(f"{c.get('size')} with no crier among news")
+        if not any("constable" in x for x in law):
+            warns.append(f"{c.get('size')} with no constable among law")
+
+
+TEMPLE_TIERS = (("shrine", 0, 99), ("chapel", 100, 499), ("temple", 500, 4999), ("cathedral", 5000, 10 ** 9))  # ours
+
+
+def settlement_temples(c, warns):
+    ts = c.get("temples") or []
+    pop = c.get("population") if isinstance(c.get("population"), int) else 0
+    if not ts:
+        warns.append("--temples: no temples")
+        return
+    tot = 0
+    for t in ts:
+        n, k, f = t.get("name", "?"), t.get("kind"), t.get("faithful")
+        if not isinstance(f, int) or f < 0:
+            warns.append(f"temple {n}: faithful wants a number")
+            continue
+        tot += f
+        tier = next(x for x in TEMPLE_TIERS if x[1] <= f <= x[2])
+        print(f"temple {n}: {f} faithful, fits a {tier[0]}")
+        if k and k != tier[0]:
+            warns.append(f"temple {n}: a {k} with {f} faithful; that fits a {tier[0]} ({tier[1]} to {tier[2]})")
+    if tot > pop:
+        warns.append(f"{tot} faithful across temples, more than the population {pop}")
+
+
+def settlement_justice(c, warns):
+    js = c.get("justice") or []
+    d = c.get("defence") if isinstance(c.get("defence"), dict) else {}
+    guards = c.get("law") or c.get("guards") or d.get("patrol")
+    for j in js:
+        if not j.get("sentence"):
+            warns.append(f"offence {j.get('offence', '?')}: no sentence")
+        else:
+            print(f"{j.get('offence', '?')}: {j['sentence']}")
+    if guards and not js:
+        warns.append("guards but no justice: say what each offence costs (justice [{offence, sentence}])")
+
+
+STRONGHOLD_CONDITIONS = ("ruin", "poor", "worn", "sound", "pristine")
+
+
+def site_stronghold(d, warns):
+    s = d.get("stronghold") or {}
+    for k in ("purpose", "builder", "age", "condition"):
+        if not s.get(k):
+            warns.append(f"stronghold: no {k}")
+    if s.get("condition") and s["condition"] not in STRONGHOLD_CONDITIONS:
+        warns.append(f"stronghold: condition {s['condition']!r}, use " + "|".join(STRONGHOLD_CONDITIONS))
+    if s.get("purpose") in SITE_PURPOSE:
+        site_purpose(d, s["purpose"], warns)
+    if "adventurer" in str(s.get("builder", "")).lower() and not d.get("traps") and not d.get("odd_guards"):
+        warns.append("built by a retired adventurer with no traps and no odd_guards; they know what thieves try")
+    age = s.get("age")
+    if isinstance(age, int) and age > 100 and s.get("condition") == "pristine":
+        warns.append(f"pristine at {age} years; say who keeps it up")
+    print("stronghold: " + ", ".join(f"{k} {s.get(k, '?')}" for k in ("purpose", "builder", "age", "condition")))
+
+
+SITE_ACCESS = ("secret", "controlled", "fluctuating", "public")
+
+
+def site_access(d, access, warns):
+    if access == "controlled" and not d.get("test_at"):
+        warns.append("controlled access with no test_at: name where the entry test happens")
+    for h in d.get("halls") or []:
+        acc = h.get("access", access)
+        if acc in ("secret", "controlled") and h.get("door") == "open" and not h.get("test"):
+            warns.append(f"hall {h.get('name', '?')}: {acc} with an open door and no entry test")
+    print(f"access {access}" + (f", tested at {d['test_at']}" if d.get("test_at") else ""))
+
+
+GUILD_PROOF = ("trophy", "item", "witness")
+
+
+def cmd_guild(a):
+    """Quest board JSON {ranks: [...], quests: [{title, location, distance, contact, proof, no_proof, voucher_by, posted_by, rank}]}."""
+    d = load_json(a.file)
+    qs = d.get("quests") if isinstance(d, dict) else d
+    ranks = (d.get("ranks") or []) if isinstance(d, dict) else []
+    if not qs:
+        die("no quests")
+    errs, warns = [], []
+    for i, q in enumerate(qs, 1):
+        n = q.get("title", f"quest {i}")
+        for k, why in (("location", "where"), ("distance", "how far"), ("contact", "who knows more")):
+            if not q.get(k):
+                errs.append(f"{n}: no {k} ({why})")
+        if q.get("proof") not in GUILD_PROOF:
+            errs.append(f"{n}: proof {q.get('proof')!r}, use " + "|".join(GUILD_PROOF))
+        if not q.get("no_proof"):
+            warns.append(f"{n}: no no_proof fallback (what is paid when the proof is lost)")
+        if not q.get("voucher_by"):
+            warns.append(f"{n}: no voucher_by (who pays out)")
+        elif q.get("voucher_by") == q.get("posted_by"):
+            warns.append(f"{n}: voucher paid by {q['voucher_by']}, who posted it; let a different NPC pay")
+        if ranks and q.get("rank") not in ranks:
+            warns.append(f"{n}: rank {q.get('rank')!r} is not in ranks; ranks gate who may take it")
+    report(errs, warns, f"{len(qs)} quest card(s)" + (f", {len(ranks)} ranks" if ranks else ""))
+
+
+def rooms_shift(rooms, warns):
+    for r in rooms:
+        n = r.get("name", "?")
+        day, night = r.get("day"), r.get("night")
+        if bool(day) != bool(night):
+            warns.append(f"{n}: only a {'day' if day else 'night'} shift; who is here the other half")
+        elif not day:
+            warns.append(f"{n}: no day or night occupants")
+        if r.get("stairs_rank") and not r.get("guard"):
+            warns.append(f"{n}: stairs gated to rank {r['stairs_rank']} with no guard")
+        print(f"{n}: day {day or '-'}; night {night or '-'}")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     for name, fn in (("encounter", cmd_encounter), ("budget", cmd_budget)):
         s = sub.add_parser(name)
-        s.add_argument("--system", choices=["pf2e", "sf2e", "5e"], required=True)
+        s.add_argument("--system", choices=["pf2e", "sf2e", "5e"], required=name == "budget")
         s.add_argument("--party", type=int, default=4)
-        s.add_argument("--level", type=int, required=True)
+        s.add_argument("--level", type=int, required=name == "budget")
         if name == "encounter":
-            s.add_argument("--foe", action="append", required=True, help="creature level (pf2e/sf2e) or CR (5e); repeat per foe")
+            s.add_argument("--foe", action="append", help="creature level (pf2e/sf2e) or CR (5e); repeat per foe")
+            s.add_argument("--card", help="encounters JSON: type, function, point per encounter (no XP math)")
             s.add_argument("--mission", help="what the party must do: kill, rescue, hold, escape, steal, ritual...")
             s.add_argument("--clock", type=int, help="rounds before the mission fails")
             s.add_argument("--healers", type=int, default=0, help="foes that heal or grant temp HP")
@@ -7760,6 +8025,7 @@ def main(argv=None):
     s.add_argument("--agenda", action="store_true", help="warn on NPCs without 2+ goals: and a tell:")
     s.add_argument("--recurring", action="store_true", help="recurring NPCs: reacts, danger, questions, survival, unique names")
     s.add_argument("--pcs", help="--recurring: a,b PC names each recurring NPC reacts: to")
+    s.add_argument("--roles", action="store_true", help="role: patron|ally|...|wild card with activates:, hinderer tell")
     s.set_defaults(fn=cmd_npcs)
     s = sub.add_parser("world", help="check a setting card's traits")
     s.add_argument("card"); s.set_defaults(fn=cmd_world)
@@ -8000,6 +8266,9 @@ def main(argv=None):
     s.add_argument("card"); s.set_defaults(fn=cmd_settlement)
     s.add_argument("--farmland", type=float, metavar="ACRES", help="can farmland plus food_imports feed the population")
     s.add_argument("--per-acre", type=float, default=FED_PER_ACRE, help="--farmland: people fed per acre (ours)")
+    s.add_argument("--news", action="store_true", help="news channels and law officers by size; a city wants a crier and constable")
+    s.add_argument("--temples", action="store_true", help="temples [{name, kind, faithful}] tiered by faithful")
+    s.add_argument("--justice", action="store_true", help="justice [{offence, sentence}]; guards with no sentences warn")
     s = sub.add_parser("favor", help="ask an NPC a favor, seeded")
     s.add_argument("--relation", choices=list(FAVOR_BASE), required=True)
     s.add_argument("--risk", choices=list(FAVOR_RISK), required=True); s.add_argument("--seed", type=int)
@@ -8034,6 +8303,7 @@ def main(argv=None):
     s.add_argument("--muffle", action="store_true", help="which rooms hear a noise: true room; muffled rooms damp it")
     s.add_argument("--teleport", action="store_true", help="teleport tables: every result reaches an exit; a bypass")
     s.add_argument("--hooks", action="store_true", help="hooks gated by a check need later: how they resolve")
+    s.add_argument("--shift", action="store_true", help="day and night occupants per room; rank-gated stairs need a guard")
     s.add_argument("file"); s.set_defaults(fn=cmd_rooms)
     s = sub.add_parser("session-end", help="rounds left and the final turns")
     s.add_argument("--seed", type=int); s.add_argument("--die", type=int, default=6)
@@ -8151,6 +8421,8 @@ def main(argv=None):
     s.add_argument("--prey-per", type=int, default=PREY_PER_PREDATOR, help="--food: prey each predator needs")
     s.add_argument("--purpose", choices=list(SITE_PURPOSE), help="check keyed areas against the site's purpose")
     s.add_argument("--water", action="store_true", help="settlements and camps name a water source big enough")
+    s.add_argument("--stronghold", action="store_true", help="stronghold {purpose, builder, age, condition}")
+    s.add_argument("--access", choices=list(SITE_ACCESS), help="halls [{name, door, test, access}] against the access type")
     s.set_defaults(fn=cmd_site)
     s = sub.add_parser("interrogate", help="check an interrogation ladder: ascending DCs, truth tags, the real story")
     s.add_argument("file"); s.set_defaults(fn=cmd_interrogate)
@@ -8160,7 +8432,16 @@ def main(argv=None):
     s.add_argument("--file", default=str(Path(os.environ.get("TABLEWRIGHT_HOME") or Path.home() / ".tablewright") / "carry.json"))
     s.set_defaults(fn=cmd_carry)
     s = sub.add_parser("rumors", help="check a lead list, or {quests, rumors} with quest and true: yes|no|later each")
-    s.add_argument("file"); s.set_defaults(fn=cmd_rumors)
+    s.add_argument("file", nargs="?"); s.set_defaults(fn=cmd_rumors)
+    s.add_argument("--spread", type=float, metavar="BLOCKS", help="blocks to the district edge: hours for hot news")
+    s.add_argument("--edge", type=float, metavar="BLOCKS", help="--spread: blocks to the city edge")
+    s.add_argument("--rate", type=float, default=NEWS_RATE, help="--spread: blocks an hour (ours)")
+    s.add_argument("--truth", action="store_true", help="true rumours a small minority, some partial")
+    s.add_argument("--max-true", type=float, default=RUMOR_TRUE_MAX, help="--truth: highest share of true rumours")
+    s = sub.add_parser("triggers", help="check IF/THEN triggers: bound or unbound, a visible result each")
+    s.add_argument("file"); s.set_defaults(fn=cmd_triggers)
+    s = sub.add_parser("guild", help="check guild quest-board cards: where, how far, contact, proof, voucher, rank")
+    s.add_argument("file"); s.set_defaults(fn=cmd_guild)
     s = sub.add_parser("rest", help="hourly interruption odds for a rest whose target drops each quiet hour")
     s.add_argument("--interrupt", type=int, help="d20 target for an event in hour 1")
     s.add_argument("--awake", type=float, help="hours without sleep: the sleep-deprivation ladder instead")

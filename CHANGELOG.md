@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.35.0 (2026-11-26)
+- `encounter --card`: each encounter has a `type` (combat, roleplay, puzzle), one or more `function` tags (hook, obstacle, prospect) and a `point` (endpoint, turning, intermediate); no function warns, an arc with no endpoint warns, a random fight tagged hook with nothing that `outlives` it warns. Idea inspired by Gygax's Insidiae.
+- `npcs --roles`: `role:` patron, ally, neutral, hinderer, competitor, enemy or wild card with an `activates:` condition; no role warns, a hinderer with no `tell:` warns, `central: yes` (more central than the PCs) warns. A new `role:` field; the older free-form `roles:` job list is unchanged. Idea inspired by Gygax's Insidiae.
+- `triggers`: a new command for IF/THEN lines marked `bound` or unbound, optionally `offstage`; a THEN with no `visible` result for the PCs warns. Idea inspired by Gygax's Insidiae.
+- `rumors --spread BLOCKS [--edge BLOCKS] [--rate 1]`: hours for hot news to reach the district and city edge (one block an hour, ours). Merged into the existing `rumors` command; its file is now optional with `--spread`. Idea inspired by Living Fantasy.
+- `settlement --news`: news channels and law officers wanted by size band (our tiers); a small city or bigger with no crier or no constable warns. Idea inspired by Living Fantasy.
+- `settlement --temples`: `temples` [{`name`, `kind`, `faithful`}] tiered shrine, chapel, temple, cathedral by faithful (our bands); a kind that does not fit its faithful, or more faithful than people, warns. Idea inspired by Living Fantasy.
+- `site --stronghold`: `stronghold` {`purpose`, `builder`, `age`, `condition` ruin|poor|worn|sound|pristine}; keyed areas are checked against the purpose (reusing `--purpose`), a retired-adventurer builder with no `traps` or `odd_guards` warns. Idea inspired by Engineering Castles.
+- `site --access secret|controlled|fluctuating|public`: a secret or controlled hall with an open door and no entry `test` warns; controlled access wants `test_at`. Idea inspired by Engineering Castles.
+- `rumors --truth [--max-true 0.25]`: in the {quests, rumors} form, true rumours over the share warn and no `true: partial` warns; `partial` is now a valid value. Idea inspired by Engineering Castles.
+- `guild`: a new quest-board card lint (location, distance, contact who knows more, proof trophy|item|witness, a no-proof fallback, a voucher paid by a different NPC than the poster, ranks gating access). Idea inspired by Haven Cross: The Adventurers Guild.
+- `settlement --justice`: `justice` [{`offence`, `sentence`}]; an offence with no sentence warns, guards with no sentences warn. Idea inspired by Haven Cross: The Adventurers Guild.
+- `rooms --shift`: `day` and `night` occupants per room; one shift only warns, `stairs_rank` with no `guard` warns. Idea inspired by Haven Cross: The Adventurers Guild.
+- `encounter` no longer needs `--system`, `--level` and `--foe` when `--card` is given; without `--card` a missing one still exits 2.
+- All numbers are ours and settable; no book text or tables copied. 12 new tests.
+
 ## 0.34.0 (2026-11-26)
 - `battle --caster`: the plan's `caster` {`area_spells`, `per_spell`} against `enemy_size` (or the `count` of the second side's units); an enemy under 3x the caster's area output (`--absorb`) warns and suggests a size. Idea inspired by the Castles & Crusades Castle Keeper's Guide, p. 174.
 - `site --food`: `creatures` [{`name`, `diet` predator|prey|guardian, `count`, `food`, `hoard_origin`}]; more predators than the prey feeds (4 each, `--prey-per`) warns, so does a guardian with no food and no hoard origin. Idea inspired by the Castle Keeper's Guide, pp. 127, 190.
