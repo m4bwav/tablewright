@@ -143,6 +143,8 @@ def band_for(total, budgets):
 def cmd_encounter(a):
     if a.card:
         return encounter_card(a.card)
+    if a.cascade:
+        return encounter_cascade(a)
     for k in ("system", "level", "foe"):
         if getattr(a, k) is None:
             die(f"encounter needs --{k} (or --card FILE)")
@@ -2422,6 +2424,9 @@ def cmd_wander(a):
               f" about {expected:.1f} encounters in {a.hours:g} h")
     else:
         print(f"{checks} checks at 1 in {a.chance}: about {expected:.1f} encounters in {a.hours:g} h")
+    if a.risk:
+        add, why = WANDER_RISK[a.risk]
+        print(f"risk {a.risk} ({why}): add {add} to each group's count")
     if a.bump:
         print(f"bump: a fight makes noise; the next check is 1 in {max(1, a.chance - a.bump)}")
     if expected > a.budget:
@@ -2767,6 +2772,10 @@ def travel_oddity(a):
 
 def cmd_travel(a):
     """Days for a trip: pace times terrain, hours past 8 a day cost fatigue, an unknown route adds a quarter."""
+    if a.road_segment is not None:
+        travel_road_segment(a)
+        if a.miles is None:
+            return
     if a.watches is not None:
         travel_watches(a)
         if a.miles is None:
@@ -2780,6 +2789,7 @@ def cmd_travel(a):
     per_day = a.pace * TERRAIN[a.terrain] * a.hours / 8
     if a.oddity:
         per_day *= travel_oddity(a)
+    per_day *= travel_light_frac(a)
     days = a.miles / per_day * (1 if a.known else 1.25)
     whole = math.ceil(days - 1e-9)
     print(f"{per_day:.1f} miles a day on {a.terrain}; {whole} day(s) for {a.miles:g} miles"
@@ -3379,7 +3389,9 @@ def travel_checks(a, whole):
     """Seeded navigation per day off a known route, and a tracking target number."""
     import random
     rng = random.Random(a.seed)
-    if a.navigate is not None:
+    if a.navigate is not None and (a.navigators > 1 or a.light in ("moon", "dark")):
+        travel_navigators(a, whole)
+    elif a.navigate is not None:
         dc = NAV_DC[a.terrain]
         lost = 0
         if a.known or not dc:
@@ -3579,6 +3591,8 @@ SETTLE_FUNCTIONS = {"trade hub": ("lodging", "stables", "smith"), "port": ("dock
 
 def cmd_settlement(a):
     c = json.loads(Path(a.card).read_text(encoding="utf-8"))
+    if a.purchase_limit:
+        settlement_purchase(c, a.purchase_base)
     names = [b[0] for b in SETTLE_BANDS]
     size, pop = c.get("size"), c.get("population")
     errs, warns = [], []
@@ -4324,6 +4338,10 @@ def travel_watches(a):
 def cmd_weather(a):
     """Weather states from a JSON file: change chance per check, effect flags, encounters implausible in a state."""
     import random
+    if a.days:
+        return weather_days(a)
+    if not a.file:
+        die("weather needs a file (or --days N)")
     d = load_json(a.file)
     states = d.get("states") or {}
     if not states:
@@ -4718,6 +4736,8 @@ def cmd_forage(a):
         if k in (2, 12) and d.get("rare") and rng.randint(1, 6) == 6:
             item = rng.choice(d["rare"]) + " (rare swap)"
         print(f"find {i + 1}: 2d6 {k} {qty} x {item} ({row.get('rarity', 'common')})")
+        if a.spoil:
+            forage_spoil(rng, a.mod, i)
 
 
 def cmd_craft(a):
@@ -5511,6 +5531,9 @@ def cmd_realm(a):
     """Kingdom or region card: ruler, relations with deterrent and posture, entry, an uncontrolled place, hooks, a custom."""
     d = json.loads(Path(a.file).read_text(encoding="utf-8"))
     errs, warns = [], []
+    if a.changing_times:
+        realm_changing_times(d, errs, warns)
+        return report(errs, warns, "realm changing times")
     ru = d.get("ruler") or {}
     if not ru.get("name"):
         errs.append("no ruler.name")
@@ -5683,6 +5706,8 @@ def rumor_quests(d, a=None):
 
 def cmd_rest(a):
     """Hourly d20 interruption: an event on TARGET or more; each quiet hour the target drops by STEP."""
+    if a.sleep_log:
+        return rest_sleep_log(a)
     if a.awake is not None:
         return rest_awake(a.awake, a.allowance)
     if a.interrupt is None:
@@ -5952,6 +5977,8 @@ def cmd_site(a):
     """Site prep JSON: location, entries, upkeep, ecology, visitors; doors, drops, treasure, rumours; a clock with signs."""
     if a.recorrupt is not None:
         return site_recorrupt(a)
+    if a.lint or a.upkeep or a.threats:
+        return site_stronghold_extra(a)
     if not a.file:
         die("site needs a file, or --recorrupt DAYS")
     d = load_json(a.file)
@@ -6453,14 +6480,16 @@ ADVENTURE_PILLARS = ("combat", "social", "explore", "either")
 def cmd_adventure(a):
     """Adventure JSON {scenes: [{name, pillar, optional}]}: --pillars counts required and optional scenes per
     pillar; warns when combat or social is missing, one pillar holds over half, or nothing is optional."""
-    if a.elements or a.info:
+    if a.elements or a.info or a.twists or a.epilogue or a.hook:
         d = load_json(a.file)
-        warns = []
+        errs, warns = [], []
         if a.elements:
             adventure_elements(d, warns)
         if a.info:
             adventure_info(d, warns)
-        return report([], warns, "adventure" + (" elements" if a.elements else "") + (" info" if a.info else ""))
+        adventure_seed(d, a, errs, warns)
+        return report(errs, warns, "adventure" + "".join(" " + k for k in ("elements", "info", "twists", "epilogue", "hook")
+                                                         if getattr(a, k)))
     scenes = load_list(a.file, "scenes")
     errs, warns, req, opt = [], [], {}, {}
     for s in scenes:
@@ -7927,6 +7956,453 @@ def rooms_shift(rooms, warns):
         print(f"{n}: day {day or '-'}; night {night or '-'}")
 
 
+# 0.36.0: wilderness, underground, strongholds, borderlands, seeds. Structure from the books; every number is ours.
+WEATHER_LADDER = "freezing,cold,cool,mild,warm,hot"
+WIND_STEPS = ("calm", "breeze", "wind", "strong wind", "gale", "storm")
+
+
+def weather_days(a):
+    """Daily drift: one step at most inside the band; days stuck at an edge push back toward the middle."""
+    import random
+    band = [x.strip() for x in a.band.split(",") if x.strip()]
+    if len(band) < 2:
+        die("--band needs two or more steps, e.g. cold,cool,mild")
+    if a.days < 1:
+        die("--days must be 1 or more")
+    rng = random.Random(a.seed)
+    i = band.index(a.start) if a.start in band else len(band) // 2
+    edge_run = 0
+    rows = []
+    for day in range(1, a.days + 1):
+        at_edge = i in (0, len(band) - 1)
+        edge_run = edge_run + 1 if at_edge else 0
+        r = rng.randint(1, 6)
+        push = min(edge_run - 1, 3) if edge_run > 1 else 0
+        inward = 1 if i == 0 else -1
+        if at_edge and r <= 2 + push:
+            i += inward
+            move = "pushed back from the edge" if push else "off the edge"
+        elif not at_edge and r <= 2:
+            i -= 1
+            move = "down a step"
+        elif not at_edge and r >= 5:
+            i += 1
+            move = "up a step"
+        else:
+            move = "holds"
+        peak = rng.randint(0, len(WIND_STEPS) - 1)
+        rows.append((day, band[i], move, peak, peak // 2, r))
+    gm = a.view == "gm"
+    for day, sky, move, peak, rest, r in rows:
+        if gm:
+            print(f"day {day}: {sky} ({move}, d6 {r}); gust peak {WIND_STEPS[peak]}, then {WIND_STEPS[rest]} the rest of the day")
+        else:
+            print(f"day {day}: {sky}; " + ("gusty at times" if peak >= 3 else "steady air"))
+    if gm:
+        print("player view: run again with --view player for what the party sees")
+    print(f"ok: {a.days} day(s) inside {band[0]}..{band[-1]}")
+
+
+TRAVEL_LIGHT = {"day": 1.0, "moon": 0.5, "dark": 0.25}
+TRAVEL_OBSCURE = {"fog": 0.5, "snow": 0.75, "blizzard": 0.25, "dust": 0.5}
+LIGHT_NAV_DC = {"day": 0, "moon": 2, "dark": 5}
+
+
+def travel_light_frac(a):
+    frac = TRAVEL_LIGHT[a.light or "day"] * (TRAVEL_OBSCURE[a.obscure] if a.obscure else 1)
+    if frac < 1:
+        shown = min(1.0, frac * 2) if a.push else frac
+        print(f"light {a.light or 'day'}" + (f", {a.obscure}" if a.obscure else "") + f": speed x{frac:g}, applied last"
+              + (f"; pushing: x{shown:g} (capped at double), one obstacle check per hour" if a.push else ""))
+        if a.light in ("moon", "dark"):
+            print("night: probe the ground ahead; a fall or a wrong turn on a failed obstacle check")
+        return shown
+    return 1.0
+
+
+def travel_navigators(a, whole):
+    """Secret roll per navigator a day: failure veers 90 degrees; the worst roll, failed by 5+, reverses."""
+    import random
+    rng = random.Random(a.seed)
+    dc = NAV_DC[a.terrain] + LIGHT_NAV_DC[a.light or "day"]
+    if a.known or not NAV_DC[a.terrain]:
+        print("navigation: no checks (known route or road)")
+        return
+    print(f"navigation (GM only): {a.navigators} navigator(s), d20 {a.navigate:+d} vs {dc}")
+    for day in range(1, whole + 1):
+        rolls = [rng.randint(1, 20) + a.navigate for _ in range(a.navigators)]
+        worst = min(rolls)
+        calls = []
+        for n, r in enumerate(rolls, 1):
+            if r >= dc:
+                call = "on course"
+            elif r == worst and dc - r >= 5:
+                call = "reversed (heading back the way you came)"
+            else:
+                call = "veered 90 degrees " + rng.choice(("left", "right"))
+            calls.append(call)
+            print(f"day {day}: navigator {n} {r} vs {dc}: {call}")
+        if len(set(calls)) > 1:
+            print(f"day {day}: navigators disagree; the players choose whose heading to follow")
+
+
+def travel_road_segment(a):
+    """Two stages a watch: none, mundane or dangerous, then that band's table for the segment."""
+    import random
+    rng = random.Random(a.seed)
+    try:
+        lo, hi = (int(x) for x in a.segment_odds.split("/"))
+    except ValueError:
+        die("--segment-odds wants MUNDANE/DANGEROUS d20 floors, e.g. 13/19")
+    segs = load_json(a.road_segment) if a.road_segment else [{"name": "road"}]
+    if isinstance(segs, dict):
+        segs = segs.get("segments", [])
+    for s in segs:
+        name = s.get("name", "?")
+        for watch in ("morning", "afternoon", "night"):
+            r = rng.randint(1, 20)
+            band = "dangerous" if r >= hi else "mundane" if r >= lo else "none"
+            line = f"{name} {watch}: d20 {r}: {band}"
+            tab = s.get(band) if band != "none" else None
+            if tab:
+                line += f" -> {rng.choice(tab)}"
+            elif band == "mundane":
+                line += " (mostly locals)"
+            print(line)
+    print(f"ok: {len(segs)} segment(s), none under {lo}, mundane {lo}-{hi - 1}, dangerous {hi}+")
+
+
+SPOIL_TABLE = {1: "poisonous", 2: "spoiled (half the amount)", 3: "filler (looks right, no use)"}
+
+
+def forage_spoil(rng, mod, i):
+    """Second roll per find; skill adds safety (+1 per 4 of --mod), never more finds."""
+    r = rng.randint(1, 6)
+    bonus = max(0, mod) // 4
+    print(f"  find {i + 1} spoil d6 {r}" + (f"+{bonus}" if bonus else "") + f": {SPOIL_TABLE.get(r + bonus, 'good')}")
+
+
+def rest_sleep_log(a):
+    """No penalty until the second short night running; the run's average sleep sets it; one full night clears."""
+    try:
+        hrs = [float(x) for x in a.sleep_log.split(",") if x.strip()]
+    except ValueError:
+        die("--sleep-log wants hours per night, e.g. 8,5,4,8")
+    run, penalty = [], 0
+    for n, h in enumerate(hrs, 1):
+        if h >= a.full:
+            note = "full night: debt cleared" if penalty or run else "full night"
+            run, penalty = [], 0
+        elif h < a.short:
+            run.append(h)
+            if len(run) >= 2:
+                avg = sum(run) / len(run)
+                penalty = 1 if avg >= 4 else 2 if avg >= 2 else 3
+                note = f"short night {len(run)} running (average {avg:.1f} h): -{penalty} to checks"
+            else:
+                note = "short night: no effect yet"
+        else:
+            note = f"middling night: debt held at -{penalty}" if penalty else "middling night"
+        print(f"night {n}: {h:g} h; {note}")
+    print(f"ok: sleep debt now -{penalty}")
+
+
+AIR_DRAIN = {"rest": 1, "work": 2, "fight": 3}
+AIR_FIRE = 6
+AIR_VENT = {"sealed": 0, "poor": 2, "fair": 5, "good": 999}
+SMOKE_FT = {"sealed": 1.0, "poor": 0.5, "fair": 0.25, "good": 0.0}
+
+
+def cmd_air(a):
+    """Sealed-space air: a pool of air units drained per breather by effort and per fire; vents refill; smoke drops."""
+    drain = 0
+    for part in (a.breathers or "").split(","):
+        if not part.strip():
+            continue
+        eff, _, n = part.partition(":")
+        if eff not in AIR_DRAIN or not n.isdigit():
+            die(f"bad breathers {part!r} (use rest:2,work:1,fight:1)")
+        drain += AIR_DRAIN[eff] * int(n)
+    drain += AIR_FIRE * a.fires
+    if a.volume <= 0:
+        die("--volume must be above 0")
+    pool = a.volume / 10
+    net = drain - AIR_VENT[a.vent]
+    print(f"air: {pool:g} units ({a.volume:g} cu ft), drain {drain}/turn, vent {a.vent} refills {min(AIR_VENT[a.vent], drain)}")
+    if net <= 0:
+        print("air holds: the vents keep up")
+    else:
+        print(f"air out in {pool / net:.1f} turn(s); after that a save each turn: failure costs 1d6 HP and a fatigue step, not death")
+    if a.fires:
+        rate = SMOKE_FT[a.vent] * a.fires
+        if rate:
+            t = max(0.0, (a.ceiling - a.head) / rate)
+            print(f"smoke layer drops {rate:g} ft/turn from the {a.ceiling:g} ft ceiling: head height ({a.head:g} ft) in {t:.1f} turn(s)")
+        else:
+            print("smoke clears through the vents")
+    print("ok: air")
+
+
+COLLAPSE_WHERE = ("ahead: the way on is blocked, find a detour", "ahead: the way on is blocked, find a detour",
+                  "behind: the way back is cut", "a side passage closes", "a side passage closes",
+                  "overhead: a save or 2d6 damage, then dig out (never instant death)")
+
+
+def cmd_collapse(a):
+    """Cave-in cascade over an adjacency JSON, chance falling per step (flat if rotten); --daily places one by direction."""
+    import random
+    rng = random.Random(a.seed)
+    if a.daily:
+        r = rng.randint(1, a.odds)
+        if r != 1:
+            print(f"daily d{a.odds} {r}: no collapse today")
+        else:
+            print(f"daily d{a.odds} 1: collapse {rng.choice(COLLAPSE_WHERE)} (placed relative to travel: it reroutes)")
+        return print("ok: collapse daily")
+    if not a.file or not a.start:
+        die("collapse needs FILE and --start CELL (or --daily)")
+    d = load_json(a.file)
+    cells = d.get("cells", d) if isinstance(d, dict) else {}
+    if a.start not in cells:
+        die(f"start {a.start!r} not in cells")
+    bad = sorted({n for v in cells.values() for n in v if n not in cells})
+    if bad:
+        report([f"unknown neighbour {n}" for n in bad], [], "")
+    fallen, front, step = {a.start}, [a.start], 0
+    print(f"step 0: {a.start} falls")
+    while front:
+        step += 1
+        chance = a.chance if a.rotten else a.chance - a.step * (step - 1)
+        if chance <= 0:
+            break
+        nxt = []
+        for c in front:
+            for n in cells[c]:
+                if n in fallen:
+                    continue
+                r = rng.randint(1, 100)
+                if r <= chance:
+                    fallen.add(n)
+                    nxt.append(n)
+                    print(f"step {step}: {n} falls (d100 {r} <= {chance})")
+        front = nxt
+    print(f"ok: {len(fallen)} of {len(cells)} cell(s) fell" + (" (rotten rock: flat chance)" if a.rotten else ""))
+
+
+STRONG_STAFF = {"chapel": "priest", "library": "scribe", "forge": "smith", "stable": "groom", "kennel": "handler",
+                "lab": "alchemist", "garden": "gardener", "kitchen": "cook"}
+UPKEEP_BAND = (0.01, 0.03)
+INCOME_BAND = (0.005, 0.02)
+NEIGHBOUR_REACT = ("raids before the walls are done", "demands tribute", "sends a spy among the workers",
+                   "waits and watches", "offers trade", "offers an alliance, with strings")
+WHY_NOT_BUILT = ("the ground floods in spring", "an old curse the locals still fear", "a monster's lair lies under it",
+                 "a lord already claims it", "the last builder vanished", "nobody needed it before the new road")
+
+
+def stronghold_lint(d, warns):
+    if not d.get("water_inside"):
+        warns.append("hook: no water inside the walls; a siege ends fast")
+    if not d.get("food_inside"):
+        warns.append("hook: no food store inside")
+    if d.get("interior") == "wood" and d.get("shell", "stone") == "stone":
+        warns.append("hook: wooden interior in a stone shell; one fire guts it")
+    if d.get("defence_scale") == "army":
+        warns.append("hook: defences sized only for armies; a small strike team walks past them")
+    for e in d.get("secret_exits") or []:
+        if e.get("known_to_former"):
+            warns.append(f"hook: secret exit {e.get('name', '?')} is known to former owners")
+    for o in d.get("outposts") or []:
+        if not o.get("signal"):
+            warns.append(f"hook: outpost {o.get('name', '?')} cannot signal home")
+        if d.get("hidden") and o.get("lit"):
+            warns.append(f"hook: lit outpost {o.get('name', '?')} gives the hidden site away")
+    for w in d.get("watch_posts") or []:
+        if w.get("watchers", 1) < 2:
+            warns.append(f"hook: watch post {w.get('name', '?')} has one watcher")
+    for t in d.get("traps") or []:
+        if isinstance(t, dict) and not t.get("tender"):
+            warns.append(f"hook: trap {t.get('name', '?')} has no one to tend it")
+
+
+def stronghold_upkeep(d, errs, warns):
+    staff = d.get("staff") or []
+    roles = [str(s.get("role", "")).lower() for s in staff]
+    if "steward" not in roles:
+        errs.append("no steward: hire the steward first, it sizes the rest of the staff")
+    rooms = d.get("rooms") or []
+    want = max(1, math.ceil(len(rooms) / 2))
+    servants = sum(1 for r in roles if r not in ("steward", "guard captain"))
+    print(f"staff: {len(staff)} ({servants} beyond steward and captain); about {want} for {len(rooms)} room(s), one per two")
+    if servants < want:
+        warns.append(f"{servants} staff for {len(rooms)} rooms; about {want} wanted")
+    for r in rooms:
+        need = STRONG_STAFF.get(str(r.get("kind", "")).lower())
+        if need and need not in roles:
+            warns.append(f"room {r.get('name', '?')} ({r.get('kind')}) wants a {need}")
+    lv = {str(s.get("role", "")).lower(): s.get("level") for s in staff}
+    if lv.get("steward") is not None and lv.get("steward") == lv.get("guard captain"):
+        warns.append("hook: steward and guard captain are the same level; they clash over who runs the place")
+    v = d.get("value")
+    if isinstance(v, (int, float)):
+        print(f"upkeep {v * UPKEEP_BAND[0]:g}-{v * UPKEEP_BAND[1]:g} gp a month; income {v * INCOME_BAND[0]:g}-{v * INCOME_BAND[1]:g}")
+    else:
+        warns.append("no value (build cost) for the upkeep bands")
+    if len(d.get("income") or []) > 1:
+        warns.append("income from more than one source; pick the one that pays and make the rest colour")
+
+
+def stronghold_threats(d, seed):
+    import random
+    rng = random.Random(seed)
+    for n in d.get("neighbours") or []:
+        print(f"neighbour {n.get('name', '?')}: {rng.choice(NEIGHBOUR_REACT)}")
+    print(f"why nobody built here before: {rng.choice(WHY_NOT_BUILT)}")
+
+
+def site_stronghold_extra(a):
+    if not a.file:
+        die("site --lint/--upkeep/--threats need a file")
+    d = load_json(a.file)
+    sd = dict(d.get("stronghold") or {})
+    for k, v in d.items():
+        if k != "stronghold":
+            sd.setdefault(k, v)
+    errs, warns = [], []
+    if a.lint:
+        stronghold_lint(sd, warns)
+    if a.upkeep:
+        stronghold_upkeep(sd, errs, warns)
+    if a.threats:
+        stronghold_threats(sd, a.seed)
+    report(errs, warns, "stronghold " + " ".join(k for k in ("lint", "upkeep", "threats") if getattr(a, k)))
+
+
+WANDER_RISK = {"low": (0, "inside a patrol radius"), "medium": (1, "on a high road"),
+               "high": (2, "off the road"), "extreme": (4, "cursed or abandoned ground")}
+PURCHASE_BASE = 50
+
+
+def settlement_purchase(c, base):
+    """Monthly cap on what a settlement buys from the party: base times 2 per size class above thorp."""
+    names = [b["name"] for b in SIZE_BANDS]
+    if c.get("size") not in names:
+        die(f"size {c.get('size')!r}, use " + ", ".join(names))
+    cap = base * 2 ** names.index(c["size"])
+    print(f"{c['size']}: buys up to {cap:g} gp a month from the party (doubles each size class)")
+    return cap
+
+
+REALM_TEMPLATE = ("name", "ruler", "capital", "population", "law", "faith", "trade", "threats", "changing_times")
+JURISDICTION = ("roads", "courts", "cities", "villages")
+
+
+def realm_changing_times(d, errs, warns):
+    for k in REALM_TEMPLATE:
+        if not d.get(k):
+            warns.append(f"template: no {k}")
+    ct = d.get("changing_times") or {}
+    if ct:
+        segs, filled = ct.get("clock"), ct.get("filled", 0)
+        if not isinstance(segs, int) or segs < 2:
+            errs.append("changing_times.clock wants a whole number of segments, 2 or more")
+        else:
+            print(f"tension clock: {filled}/{segs} '{ct.get('trend', '?')}'" + (f"; sign to watch: {ct['sign']}" if ct.get("sign") else ""))
+            if filled >= segs:
+                warns.append("tension clock is full: the trend lands now")
+        if not ct.get("sign"):
+            warns.append("changing_times: no sign for the players to watch")
+    j = d.get("jurisdiction") or {}
+    for k in JURISDICTION:
+        if not j.get(k):
+            warns.append(f"jurisdiction: who answers for {k}?")
+        else:
+            print(f"jurisdiction {k}: {j[k]}")
+
+
+CASCADE_EVERY = {"wilds": 4, "road": 4, "city": 2, "dungeon": 1}
+
+
+def cascade_range(spec):
+    lo, _, hi = str(spec).partition("-")
+    return int(lo), int(hi or lo)
+
+
+def encounter_cascade(a):
+    """Master table by context to a category, then the category's terrain column; 'twice' rolls twice more on a smaller die."""
+    import random
+    d = load_json(a.cascade)
+    rng = random.Random(a.seed)
+    ctx = a.context or "wilds"
+    master = (d.get("master") or {}).get(ctx)
+    if not master:
+        die(f"no master table for context {ctx!r}")
+    cats = d.get("categories") or {}
+    errs = [f"master {ctx}: unknown category {m.get('to')}" for m in master if m.get("to") not in cats and m.get("to") != "twice"]
+    if errs:
+        report(errs, [], "")
+    big = max(cascade_range(m["roll"])[1] for m in master)
+    small = max([cascade_range(m["roll"])[1] for m in master if m.get("to") != "twice"] or [big])
+    print(f"context {ctx}: check every {CASCADE_EVERY.get(ctx, 4)} h; master d{big}")
+
+    def pick(die_n, depth):
+        r = rng.randint(1, die_n)
+        pad = "  " * depth
+        m = next((m for m in master if cascade_range(m["roll"])[0] <= r <= cascade_range(m["roll"])[1]), None)
+        if m is None:
+            return print(f"{pad}d{die_n} {r}: no row")
+        if m["to"] == "twice":
+            print(f"{pad}d{die_n} {r}: roll twice more on d{small}")
+            for _ in range(2):
+                pick(small, depth + 1)
+            return
+        cat = cats[m["to"]]
+        col = cat.get(a.terrain) if isinstance(cat, dict) else cat
+        if col in (None, "-", []):
+            return print(f"{pad}d{die_n} {r}: {m['to']}: never in {a.terrain} (dash); nothing")
+        print(f"{pad}d{die_n} {r}: {m['to']}: {rng.choice(col) if isinstance(col, list) else col}")
+    pick(big, 0)
+    print("ok: cascade")
+
+
+TWIST_TYPES = ("sympathetic", "framed", "backer", "weak_point", "originator", "pc_keyed")
+
+
+def adventure_seed(d, a, errs, warns):
+    if a.twists:
+        tw = d.get("twists") or []
+        if not tw:
+            import random
+            pick = random.Random(a.seed).sample(TWIST_TYPES, min(a.twists, len(TWIST_TYPES)))
+            print("twists to write (rival answers to one core question): " + ", ".join(pick))
+        else:
+            if len(tw) != a.twists:
+                warns.append(f"{len(tw)} twist(s), want {a.twists}")
+            types = [t.get("type") for t in tw]
+            for t in types:
+                if t not in TWIST_TYPES:
+                    errs.append(f"twist type {t!r}, use " + ", ".join(TWIST_TYPES))
+            for t in sorted({t for t in types if t and types.count(t) > 1}):
+                warns.append(f"two twists of type {t}; make them rival answers of different kinds")
+            if not d.get("question"):
+                warns.append("no question: the twists should answer one core question")
+    if a.epilogue:
+        ep = d.get("epilogue") or {}
+        if not ep.get("text"):
+            errs.append("no epilogue.text: what follows because the PCs won")
+        elif "escape" in ep["text"].lower():
+            warns.append("epilogue leans on the villain escaping; build it from what the win changed")
+        need = ep.get("twist")
+        if need and need not in [t.get("type") for t in d.get("twists") or []]:
+            warns.append(f"epilogue assumes twist {need}, which is not among the twists")
+    if a.hook:
+        if not (d.get("patron") or {}).get("selfish"):
+            warns.append("hook: the patron has no selfish motive")
+        if not any(str(r.get("kind", "")).lower() != "combat" for r in d.get("routes") or []):
+            warns.append("hook: no non-combat route")
+        if not d.get("pc_slot"):
+            warns.append("hook: no slot tied to a PC's backstory")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="tt.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -7969,6 +8445,9 @@ def main(argv=None):
             s.add_argument("--retreat", action="append", help="FOE:SHARE a foe leaves at this HP share; repeat")
             s.add_argument("--ally-at", action="append", help="ROUND:NAME an ally joins at this round")
             s.add_argument("--ally-if", help="the flag that earns --ally-at, e.g. rescued-smith")
+            s.add_argument("--cascade", help="cascade JSON {master: {context: [{roll, to}]}, categories: {name: {terrain: [..]|'-'}}}")
+            s.add_argument("--context", choices=list(CASCADE_EVERY), help="--cascade: master table and check interval")
+            s.add_argument("--seed", type=int)
         else:
             s.add_argument("--threat", default="moderate")
         s.add_argument("--json", action="store_true")
@@ -8104,6 +8583,7 @@ def main(argv=None):
     s.add_argument("--night-hours", type=float, default=8, help="the last H hours of --hours are night")
     s.add_argument("--bump", type=int, default=0, help="after an encounter the next check's N drops by this (noise)")
     s.add_argument("--table", help="table JSON [{name, combat, weight}]: warn on a non-combat share under 30%%")
+    s.add_argument("--risk", choices=list(WANDER_RISK), help="distance from authority: adds to each group's count")
     s.add_argument("--run", action="store_true"); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_wander)
     s = sub.add_parser("battle", help="a mass battle as three representative fights")
     s.add_argument("plan"); s.add_argument("--results", help="outcome of each fight in order: won,lost,drawn")
@@ -8134,6 +8614,13 @@ def main(argv=None):
     s.add_argument("--rain", action="store_true"); s.add_argument("--group", type=int, default=1, help="size of the tracked group")
     s.add_argument("--seed", type=int)
     s.add_argument("--oddity", help="JSON of colour events; draws one per journey, no repeats unless tagged repeat")
+    s.add_argument("--navigators", type=int, default=1, help="--navigate: secret roll per navigator; veer, reverse, disagree")
+    s.add_argument("--light", choices=list(TRAVEL_LIGHT), help="day, moon or dark: speed fraction applied last")
+    s.add_argument("--obscure", choices=list(TRAVEL_OBSCURE), help="fog, snow, blizzard or dust: speed fraction")
+    s.add_argument("--push", action="store_true", help="--light/--obscure: push to double the fraction, obstacle checks")
+    s.add_argument("--road-segment", nargs="?", const="", metavar="FILE",
+                   help="per watch: none, mundane or dangerous, then the band's table (FILE: segments [{name, mundane, dangerous}])")
+    s.add_argument("--segment-odds", default="13/19", help="--road-segment: d20 floors for mundane/dangerous (ours)")
     s.set_defaults(fn=cmd_travel)
     s = sub.add_parser("journey", help="roll journey leads from your tables, or --check a lead slate")
     s.add_argument("file"); s.add_argument("--kind", choices=["simple", "complex"], default="simple")
@@ -8269,6 +8756,8 @@ def main(argv=None):
     s.add_argument("--news", action="store_true", help="news channels and law officers by size; a city wants a crier and constable")
     s.add_argument("--temples", action="store_true", help="temples [{name, kind, faithful}] tiered by faithful")
     s.add_argument("--justice", action="store_true", help="justice [{offence, sentence}]; guards with no sentences warn")
+    s.add_argument("--purchase-limit", action="store_true", help="monthly cap on what the place buys, doubling per size")
+    s.add_argument("--purchase-base", type=float, default=PURCHASE_BASE, help="--purchase-limit: a thorp's cap in gp (ours)")
     s = sub.add_parser("favor", help="ask an NPC a favor, seeded")
     s.add_argument("--relation", choices=list(FAVOR_BASE), required=True)
     s.add_argument("--risk", choices=list(FAVOR_RISK), required=True); s.add_argument("--seed", type=int)
@@ -8320,7 +8809,10 @@ def main(argv=None):
     s = sub.add_parser("playtest", help="check a blind playtest log")
     s.add_argument("file"); s.set_defaults(fn=cmd_playtest)
     s = sub.add_parser("weather", help="weather states over hours, effects, encounters to reroll")
-    s.add_argument("file"); s.add_argument("--hours", type=float, default=24); s.add_argument("--every", type=float, default=4)
+    s.add_argument("file", nargs="?"); s.add_argument("--hours", type=float, default=24); s.add_argument("--every", type=float, default=4)
+    s.add_argument("--days", type=int, help="daily drift for N days inside --band (no file needed)")
+    s.add_argument("--band", default=WEATHER_LADDER, help="--days: the region and season's steps, low to high")
+    s.add_argument("--view", choices=("gm", "player"), default="gm", help="--days: GM forecast or what the players see")
     s.add_argument("--start"); s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_weather)
     s = sub.add_parser("unit", help="a troop type as a unit rating, or a hero at unit scale")
     s.add_argument("--hp", type=float); s.add_argument("--block", type=int, default=10, help="HP per unit point")
@@ -8347,6 +8839,7 @@ def main(argv=None):
     s.add_argument("terrain", nargs="?"); s.add_argument("--table"); s.add_argument("--check", action="store_true")
     s.add_argument("--mod", type=int, default=0); s.add_argument("--dc", type=int, default=15)
     s.add_argument("--night", action="store_true"); s.add_argument("--rain", action="store_true")
+    s.add_argument("--spoil", action="store_true", help="second roll per find: poisonous, spoiled, filler or good")
     s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_forage)
     s = sub.add_parser("craft", help="brew: one base, up to three modifiers, DC and save DC")
     s.add_argument("--recipes", required=True); s.add_argument("--base", required=True); s.add_argument("--mods")
@@ -8396,6 +8889,7 @@ def main(argv=None):
     s.add_argument("file"); s.add_argument("--strict", action="store_true", help="warnings fail too")
     s.add_argument("--government", action="store_true", help="government type, how power was gained, title ladder")
     s.add_argument("--grant", action="store_true", help="land reward cards: owner, yield, service, opt_out")
+    s.add_argument("--changing-times", action="store_true", help="template lint, tension clock with a sign, jurisdiction")
     s.set_defaults(fn=cmd_realm)
     s = sub.add_parser("doomtrack", help="check a doom track: spaces with events, scene costs, outcomes per solved paths")
     s.add_argument("file", nargs="?")
@@ -8423,6 +8917,10 @@ def main(argv=None):
     s.add_argument("--water", action="store_true", help="settlements and camps name a water source big enough")
     s.add_argument("--stronghold", action="store_true", help="stronghold {purpose, builder, age, condition}")
     s.add_argument("--access", choices=list(SITE_ACCESS), help="halls [{name, door, test, access}] against the access type")
+    s.add_argument("--lint", action="store_true", help="stronghold defence-as-design findings as GM hooks")
+    s.add_argument("--upkeep", action="store_true", help="stronghold staff roster and upkeep/income bands from value")
+    s.add_argument("--threats", action="store_true", help="neighbour reactions and why nobody built here before")
+    s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_site)
     s = sub.add_parser("interrogate", help="check an interrogation ladder: ascending DCs, truth tags, the real story")
     s.add_argument("file"); s.set_defaults(fn=cmd_interrogate)
@@ -8447,7 +8945,11 @@ def main(argv=None):
     s.add_argument("--awake", type=float, help="hours without sleep: the sleep-deprivation ladder instead")
     s.add_argument("--allowance", type=float, default=24, help="--awake: hours before saves start")
     s.add_argument("--step", type=int, default=1, help="target drops by this each quiet hour")
-    s.add_argument("--hours", type=int, default=8); s.set_defaults(fn=cmd_rest)
+    s.add_argument("--hours", type=int, default=8)
+    s.add_argument("--sleep-log", help="hours slept per night, e.g. 8,5,4,8: sleep debt from the second short night")
+    s.add_argument("--short", type=float, default=6, help="--sleep-log: under this is a short night")
+    s.add_argument("--full", type=float, default=8, help="--sleep-log: this or more clears the debt")
+    s.set_defaults(fn=cmd_rest)
     s = sub.add_parser("objective", help="boss gates over a rooms JSON: flag counts and an any-order kill list")
     s.add_argument("file"); s.add_argument("--gate", action="append", help="FLAG:N, the boss appears after N rooms set FLAG")
     s.add_argument("--kill-list", help="a,b,c foes to kill in any order; reveal on the last")
@@ -8488,6 +8990,10 @@ def main(argv=None):
     s.add_argument("--pacing", choices=("pendulum", "pit", "vise"), help="check scene difficulty: against a shape")
     s.add_argument("--elements", action="store_true", help="nine-element lint: reveal, unique foe, obstacles, clock, lead")
     s.add_argument("--info", action="store_true", help="what the party knows, learns, understands")
+    s.add_argument("--twists", type=int, help="N typed rival twists: lint them, or roll N types to write")
+    s.add_argument("--epilogue", action="store_true", help="epilogue {text, twist} follows from the win")
+    s.add_argument("--hook", action="store_true", help="patron selfish motive, a non-combat route, a pc_slot")
+    s.add_argument("--seed", type=int)
     s.set_defaults(fn=cmd_adventure)
     s = sub.add_parser("mastery", help="mastery marks per school: 4 from one trigger kind, the 4th halves the cost")
     s.add_argument("file"); s.add_argument("--school"); s.add_argument("--trigger", help="kind of deed that earns marks")
@@ -8546,6 +9052,19 @@ def main(argv=None):
     s.add_argument("file"); s.set_defaults(fn=cmd_endings)
     s = sub.add_parser("legacy", help="check a legacy item's tiers: rising, bonus fits level, deeds plannable")
     s.add_argument("file"); s.set_defaults(fn=cmd_legacy)
+    s = sub.add_parser("air", help="sealed-space air pool, breathers by effort, fires, vents, smoke layer")
+    s.add_argument("--volume", type=float, required=True, help="cubic feet of the space (10 = one air unit)")
+    s.add_argument("--breathers", default="rest:4", help="EFFORT:N,... with rest, work, fight")
+    s.add_argument("--fires", type=int, default=0); s.add_argument("--vent", choices=list(AIR_VENT), default="sealed")
+    s.add_argument("--ceiling", type=float, default=10); s.add_argument("--head", type=float, default=5.5)
+    s.set_defaults(fn=cmd_air)
+    s = sub.add_parser("collapse", help="cave-in cascade over adjacent cells, or --daily collapse placement")
+    s.add_argument("file", nargs="?", help="JSON {cells: {A: [B, C], ...}}"); s.add_argument("--start")
+    s.add_argument("--chance", type=int, default=60, help="d100 chance a neighbour falls at step 1")
+    s.add_argument("--step", type=int, default=20, help="chance lost each step out (not with --rotten)")
+    s.add_argument("--rotten", action="store_true", help="rotten rock: the chance stays flat")
+    s.add_argument("--daily", action="store_true"); s.add_argument("--odds", type=int, default=20, help="--daily: 1 in N")
+    s.add_argument("--seed", type=int); s.set_defaults(fn=cmd_collapse)
     s = sub.add_parser("licence", help="notices for the bundled tables")
     s.set_defaults(fn=lambda a: print(LICENCE))
     a = p.parse_args(argv)
