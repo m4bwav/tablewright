@@ -24,3 +24,5 @@ Append-only. One line per operation: `## [YYYY-MM-DD] op | title` where op is on
 - 2026-11-26: 0.23.0 xp-gap, rooms roleplay fallback lint, foe return_to/fall (RPG harvest session 22).
 - 2026-11-26: 0.24.0 rooms gates (requires, clue_in, locked_until, --pieces), objective command (no objective command existed), encounter --protect/--waves, rest, rumors quest mode, chase --stations (pursuit folded into chase); 222 tests.
 - 2026-11-26: 0.25.0 rooms --routes/--schedule/--muffle/--teleport/--hooks, xp --award-once/--per-rescue, encounter --buff-source/--scale/--trigger, objective --hold-rounds, trap --reset (hazard is the multi-counter round, so reset went on trap), wander --from-rooms, doomtrack --stages/--renewal, chase --collapse, site --recorrupt, new treasure-gap, ritual, boons, adventure; 231 tests. Bash heredocs with apostrophes broke on this host; wrote patch scripts with the Write tool instead.
+- 2026-11-26: 0.26.0 adventure --pacing, puzzle, prep rotation/purpose/end, rest --awake (session 26).
+- 2026-11-26: 0.27.0 item made_by sink, table --band, mastery, oneshot encounters order, prep --cues, ties (RPG round 2 session 1); .gitattributes forces LF.
